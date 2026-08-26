@@ -1,0 +1,122 @@
+# =======================
+# Flutter / Dart
+# =======================
+# Build outputs
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+
+# Dart generated files
+*.g.dart
+*.freezed.dart
+*.mocks.dart
+
+# Pub cache
+.pub-cache/
+.pub/
+
+# =======================
+# Android
+# =======================
+**/android/local.properties
+**/android/.gradle/
+**/android/captures/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/gradle/wrapper/gradle-wrapper.jar
+**/android/key.properties
+**/*.keystore
+**/*.jks
+
+# =======================
+# iOS
+# =======================
+**/ios/.generated/
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/ephemeral/
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+**/ios/Pods/
+
+# Xcode
+**/ios/*.moved-aside
+**/ios/xcuserdata/
+**/*.pbxuser
+**/*.mode1v3
+**/*.mode2v3
+**/*.perspectivev3
+**/*.xccheckout
+**/*.xcscmblueprint
+**/*.xcworkspace/xcuserdata/
+
+# =======================
+# macOS
+# =======================
+**/macos/Flutter/GeneratedPluginRegistrant.swift
+**/macos/Flutter/ephemeral/
+
+# =======================
+# Linux
+# =======================
+**/linux/flutter/ephemeral/
+
+# =======================
+# Windows
+# =======================
+**/windows/flutter/ephemeral/
+
+# =======================
+# Web
+# =======================
+lib/generated_plugin_registrant.dart
+
+# =======================
+# IDEs & Editors
+# =======================
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+.gradle/
+
+# =======================
+# OS Files
+# =======================
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# =======================
+# Environment & Secrets
+# =======================
+.env
+.env.*
+*.pem
+google-services.json
+GoogleService-Info.plist
