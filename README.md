@@ -1,17 +1,33 @@
-# stream_flix
+# StreamFlix Mobile
 
-A new Flutter project.
+A Flutter mobile adaptation of the StreamFlix web design. The app keeps the
+violet, gold, and deep-ink visual language while replacing desktop navigation
+with a phone-first bottom navigation experience.
 
-## Getting Started
+## Included
 
-This project is a starting point for a Flutter application.
+- Sign-in and registration presentation
+- Home, movies, TV shows, search, and My List experiences
+- Live TMDB catalog data and artwork
+- Responsive title details and player presentation
+- Profile, account, subscription, preferences, and support presentation
 
-A few resources to get you started if this is your first Flutter project:
+The web project's admin area is intentionally not included. There are no admin
+routes, screens, imports, or assets in this Flutter application.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Run
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Pass either a TMDB API key or read-access token at build time:
+
+```powershell
+flutter run --dart-define=TMDB_API_KEY=your_key
+```
+
+or:
+
+```powershell
+flutter run --dart-define=TMDB_READ_ACCESS_TOKEN=your_token
+```
+
+Without credentials, the application still opens and shows a setup message in
+place of the catalog.

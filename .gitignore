@@ -118,5 +118,3 @@ $RECYCLE.BIN/
 .env
 .env.*
 *.pem
-google-services.json
-GoogleService-Info.plist
