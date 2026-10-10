@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_flix/screens/settings_detail_screens.dart';
@@ -21,6 +23,97 @@ void main() {
 
     expect(find.text('Why a Google password is not shown'), findsOneWidget);
     expect(find.text('How to manage profiles'), findsNothing);
+  });
+
+  testWidgets('help center accepts and removes a validated attachment', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final attachment = SupportAttachment(
+      name: 'playback issue.PNG',
+      mimeType: 'image/png',
+      bytes: Uint8List.fromList([1, 2, 3]),
+    );
+
+    await tester.pumpWidget(
+      app(HelpCenterScreen(pickAttachment: () async => attachment)),
+    );
+    await tester.ensureVisible(find.text('Contact support'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Contact support'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Attach image (optional)'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('playback issue.PNG'), findsOneWidget);
+    expect(find.text('Replace image'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Remove attachment'));
+    await tester.pump();
+
+    expect(find.text('playback issue.PNG'), findsNothing);
+    expect(find.text('Attach image (optional)'), findsOneWidget);
+  });
+
+  test('support attachments enforce web MIME and size limits', () {
+    for (final mimeType in const [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'image/gif',
+    ]) {
+      expect(
+        () => validateSupportAttachment(
+          SupportAttachment(
+            name: 'image',
+            mimeType: mimeType,
+            bytes: Uint8List(1),
+          ),
+        ),
+        returnsNormally,
+      );
+    }
+
+    expect(
+      () => validateSupportAttachmentMetadata(
+        mimeType: 'image/png',
+        sizeInBytes: maxFeedbackAttachmentBytes,
+      ),
+      returnsNormally,
+    );
+
+    expect(
+      () => validateSupportAttachment(
+        SupportAttachment(
+          name: 'image.svg',
+          mimeType: 'image/svg+xml',
+          bytes: Uint8List(1),
+        ),
+      ),
+      throwsA(
+        isA<SupportAttachmentValidationException>().having(
+          (error) => error.message,
+          'message',
+          'Attach a PNG, JPG, WebP, or GIF image.',
+        ),
+      ),
+    );
+    expect(
+      () => validateSupportAttachmentMetadata(
+        mimeType: 'image/png',
+        sizeInBytes: maxFeedbackAttachmentBytes + 1,
+      ),
+      throwsA(
+        isA<SupportAttachmentValidationException>().having(
+          (error) => error.message,
+          'message',
+          'Attachments must be 5 MB or smaller.',
+        ),
+      ),
+    );
   });
 
   testWidgets('about screen identifies the real content providers', (

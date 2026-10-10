@@ -10,6 +10,7 @@ import '../models/playback_quality.dart';
 import '../models/member_profile.dart';
 import '../models/show.dart';
 import '../services/community_service.dart';
+import '../services/refresher_service.dart';
 import '../services/tmdb_service.dart';
 import '../services/watch_history_service.dart';
 import '../theme/app_theme.dart';
@@ -39,6 +40,7 @@ class _WatchScreenState extends State<WatchScreen> {
   final _service = TmdbService();
   late final WatchHistoryService _watchHistory;
   late final CommunityService _community;
+  late final RefresherService _refresherService;
   final _commentController = TextEditingController();
   List<CommunityComment> _comments = const [];
   Map<String, int> _reactions = emptyReactionCounts();
@@ -69,6 +71,9 @@ class _WatchScreenState extends State<WatchScreen> {
   String? _commentActionPending;
   late Future<_SoundtrackEntry> _soundtrack;
   bool _soundtrackPrimed = false;
+  RefresherBundle? _refresher;
+  bool _refresherLoading = false;
+  String? _refresherError;
 
   bool get _isSeries => widget.show.mediaType == 'tv';
   Episode? get _episode => _episodes.isEmpty
@@ -98,6 +103,7 @@ class _WatchScreenState extends State<WatchScreen> {
     final client = Supabase.instance.client;
     _watchHistory = WatchHistoryService(client);
     _community = CommunityService(client);
+    _refresherService = RefresherService(client);
     _quality = preferredPlaybackQuality(widget.planName);
     unawaited(
       _loadVideo(_quality, position: widget.initialPosition, autoplay: true),
@@ -170,6 +176,17 @@ class _WatchScreenState extends State<WatchScreen> {
           ),
         );
       }
+    }
+  }
+
+  Future<void> _openRefresherSource(Uri url) async {
+    if (await launchUrl(url, mode: LaunchMode.externalApplication)) return;
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('The Wikipedia source could not be opened.'),
+        ),
+      );
     }
   }
 
@@ -291,8 +308,13 @@ class _WatchScreenState extends State<WatchScreen> {
         setState(() {
           _communityLoading = false;
           _communityError = 'Community is unavailable for this title.';
+          _refresherLoading = false;
+          _refresherError = 'A refresher is unavailable for this title.';
         });
         return;
+      }
+      if (_panel == _WatchPanel.refresher) {
+        unawaited(_loadRefresher(contentId));
       }
       await _loadCommunity(contentId);
     } catch (error) {
@@ -303,7 +325,33 @@ class _WatchScreenState extends State<WatchScreen> {
             error,
             'Community could not be loaded.',
           );
+          _refresherLoading = false;
+          _refresherError = 'Unable to find this title for its refresher.';
         });
+      }
+    }
+  }
+
+  Future<void> _loadRefresher(int contentId) async {
+    if (_refresherLoading) return;
+    setState(() {
+      _refresherLoading = true;
+      _refresherError = null;
+    });
+    try {
+      final refresher = await _refresherService.load(contentId);
+      if (!mounted || _contentId != contentId) return;
+      setState(() => _refresher = refresher);
+    } catch (_) {
+      if (mounted && _contentId == contentId) {
+        setState(() {
+          _refresherError = 'Unable to load this refresher.';
+          _refresher = null;
+        });
+      }
+    } finally {
+      if (mounted && _contentId == contentId) {
+        setState(() => _refresherLoading = false);
       }
     }
   }
@@ -409,9 +457,17 @@ class _WatchScreenState extends State<WatchScreen> {
   }
 
   void _togglePanel(_WatchPanel panel) {
+    final opening = _panel != panel;
     setState(() {
-      _panel = _panel == panel ? _WatchPanel.player : panel;
+      _panel = opening ? panel : _WatchPanel.player;
     });
+    if (opening && panel == _WatchPanel.refresher) {
+      unawaited(_video?.pause());
+      final contentId = _contentId;
+      if (contentId != null && _refresher == null) {
+        unawaited(_loadRefresher(contentId));
+      }
+    }
   }
 
   Future<void> _postComment() async {
@@ -609,12 +665,22 @@ class _WatchScreenState extends State<WatchScreen> {
                 _panel != _WatchPanel.reactions)
               Center(
                 child: Container(
-                  width: _panel == _WatchPanel.reactions
+                  width: _panel == _WatchPanel.refresher
+                      ? MediaQuery.sizeOf(context).width * .86
+                      : _panel == _WatchPanel.reactions
                       ? MediaQuery.sizeOf(context).width * .58
                       : MediaQuery.sizeOf(context).width * .62,
                   constraints: BoxConstraints(
-                    maxWidth: _panel == _WatchPanel.reactions ? 560 : 720,
-                    maxHeight: _panel == _WatchPanel.reactions ? 150 : 300,
+                    maxWidth: _panel == _WatchPanel.refresher
+                        ? 920
+                        : _panel == _WatchPanel.reactions
+                        ? 560
+                        : 720,
+                    maxHeight: _panel == _WatchPanel.refresher
+                        ? MediaQuery.sizeOf(context).height * .78
+                        : _panel == _WatchPanel.reactions
+                        ? 150
+                        : 300,
                   ),
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
@@ -649,7 +715,16 @@ class _WatchScreenState extends State<WatchScreen> {
                       _WatchPanel.refresher => _RefresherPanel(
                         key: const ValueKey('refresher'),
                         isSeries: _isSeries,
+                        bundle: _refresher,
+                        loading:
+                            _refresherError == null &&
+                            (_refresherLoading || _contentId == null),
+                        error: _refresherError,
                         revealed: _showRefresherDetails,
+                        onRetry: _contentId == null
+                            ? null
+                            : () => unawaited(_loadRefresher(_contentId!)),
+                        onSource: (url) => unawaited(_openRefresherSource(url)),
                         onToggle: () => setState(
                           () => _showRefresherDetails = !_showRefresherDetails,
                         ),
@@ -1003,47 +1078,328 @@ class _SoundtrackEntry {
   final String? url;
 }
 
-class _RefresherPanel extends StatelessWidget {
+class _RefresherPanel extends StatefulWidget {
   const _RefresherPanel({
     super.key,
     required this.isSeries,
+    required this.bundle,
+    required this.loading,
+    required this.error,
     required this.revealed,
     required this.onToggle,
+    required this.onRetry,
+    required this.onSource,
   });
   final bool isSeries;
+  final RefresherBundle? bundle;
+  final bool loading;
+  final String? error;
   final bool revealed;
   final VoidCallback onToggle;
+  final VoidCallback? onRetry;
+  final ValueChanged<Uri> onSource;
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisAlignment: MainAxisAlignment.center,
-    children: [
-      const Icon(Icons.refresh_rounded, size: 54, color: AppColors.violetLight),
-      const SizedBox(height: 8),
-      Text(
-        '${isSeries ? 'Episode' : 'Movie'} Refresher',
-        style: Theme.of(
-          context,
-        ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
-      ),
-      const SizedBox(height: 10),
-      Text(
-        revealed
-            ? 'Key events, important characters, and story details are summarized here without requiring a scroll.'
-            : 'Get a quick reminder before you continue watching. Details stay hidden until you choose to reveal them.',
-        maxLines: 4,
-        textAlign: TextAlign.center,
-        style: const TextStyle(color: AppColors.muted),
-      ),
-      const SizedBox(height: 16),
-      FilledButton.icon(
-        onPressed: onToggle,
-        icon: Icon(
-          revealed ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+  State<_RefresherPanel> createState() => _RefresherPanelState();
+}
+
+class _RefresherPanelState extends State<_RefresherPanel> {
+  VideoPlayerController? _video;
+  int _videoLoad = 0;
+  bool _videoLoading = false;
+  bool _playing = false;
+  bool _muted = true;
+  String? _videoError;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.bundle != null) unawaited(_loadVideo(widget.bundle!.videoUrl));
+  }
+
+  @override
+  void didUpdateWidget(covariant _RefresherPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.bundle?.videoUrl != oldWidget.bundle?.videoUrl &&
+        widget.bundle != null) {
+      unawaited(_loadVideo(widget.bundle!.videoUrl));
+    }
+  }
+
+  @override
+  void dispose() {
+    _videoLoad++;
+    _video?.removeListener(_onVideoChanged);
+    unawaited(_video?.dispose());
+    super.dispose();
+  }
+
+  Future<void> _loadVideo(Uri url) async {
+    final request = ++_videoLoad;
+    final previous = _video;
+    previous?.removeListener(_onVideoChanged);
+    _video = null;
+    await previous?.dispose();
+    if (!mounted) return;
+    setState(() {
+      _videoLoading = true;
+      _videoError = null;
+      _playing = false;
+    });
+    final video = VideoPlayerController.networkUrl(url);
+    _video = video;
+    try {
+      await video.initialize();
+      if (!mounted || request != _videoLoad || _video != video) {
+        await video.dispose();
+        return;
+      }
+      video.addListener(_onVideoChanged);
+      await video.setVolume(_muted ? 0 : 1);
+      await video.play();
+      setState(() {
+        _videoLoading = false;
+        _playing = true;
+      });
+    } catch (_) {
+      if (!mounted || request != _videoLoad) return;
+      if (_video == video) {
+        _video = null;
+        await video.dispose();
+      }
+      if (mounted) {
+        setState(() {
+          _videoLoading = false;
+          _videoError = 'Refresher video could not be played.';
+        });
+      }
+    }
+  }
+
+  void _onVideoChanged() {
+    final value = _video?.value;
+    if (!mounted || value == null) return;
+    if (value.hasError && _videoError == null) {
+      setState(() => _videoError = 'Refresher video could not be played.');
+      return;
+    }
+    if (_playing != value.isPlaying) {
+      setState(() => _playing = value.isPlaying);
+    }
+  }
+
+  Future<void> _togglePlaying() async {
+    final video = _video;
+    if (video == null || !video.value.isInitialized) return;
+    if (video.value.position >= video.value.duration) {
+      await video.seekTo(Duration.zero);
+    }
+    if (video.value.isPlaying) {
+      await video.pause();
+    } else {
+      await video.play();
+    }
+  }
+
+  Future<void> _toggleMute() async {
+    final video = _video;
+    if (video == null) return;
+    setState(() => _muted = !_muted);
+    await video.setVolume(_muted ? 0 : 1);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.loading && widget.bundle == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (widget.error != null && widget.bundle == null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(widget.error!, textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: widget.onRetry,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Retry refresher'),
+            ),
+          ],
         ),
-        label: Text(revealed ? 'Hide details' : 'Reveal recap'),
+      );
+    }
+    final bundle = widget.bundle;
+    if (bundle == null) return const SizedBox.shrink();
+    final content = bundle.content;
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${widget.isSeries ? 'Episode' : 'Movie'} Refresher',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 250,
+                child: AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: ColoredBox(
+                      color: Colors.black,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (_video?.value.isInitialized == true)
+                            VideoPlayer(_video!),
+                          if (_videoLoading)
+                            const Center(child: CircularProgressIndicator()),
+                          if (_videoError != null)
+                            Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      _videoError!,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                    TextButton(
+                                      onPressed: widget.onRetry,
+                                      child: const Text('Refresh video'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          Align(
+                            alignment: Alignment.bottomCenter,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                IconButton(
+                                  tooltip: _playing ? 'Pause' : 'Play',
+                                  onPressed: _video?.value.isInitialized == true
+                                      ? _togglePlaying
+                                      : null,
+                                  icon: Icon(
+                                    _playing
+                                        ? Icons.pause_rounded
+                                        : Icons.play_arrow_rounded,
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: _muted ? 'Turn sound on' : 'Mute',
+                                  onPressed: _video?.value.isInitialized == true
+                                      ? _toggleMute
+                                      : null,
+                                  icon: Icon(
+                                    _muted
+                                        ? Icons.volume_off_rounded
+                                        : Icons.volume_up_rounded,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      content.summary,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        height: 1.4,
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => widget.onSource(content.sourceUrl),
+                      icon: const Icon(Icons.open_in_new_rounded, size: 17),
+                      label: Text('Wikipedia · ${content.sourceTitle}'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: widget.onToggle,
+            icon: Icon(
+              widget.revealed
+                  ? Icons.visibility_off_outlined
+                  : Icons.visibility_outlined,
+            ),
+            label: Text(widget.revealed ? 'Hide details' : 'Reveal recap'),
+          ),
+          if (widget.revealed) ...[
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 24,
+              runSpacing: 18,
+              children: [
+                _RefresherSection(title: 'Key Events', items: content.events),
+                _RefresherSection(
+                  title: 'Important Characters',
+                  items: content.characters,
+                ),
+                _RefresherSection(
+                  title: 'Key Details to Remember',
+                  items: content.keyDetails,
+                ),
+              ],
+            ),
+          ],
+        ],
       ),
-    ],
+    );
+  }
+}
+
+class _RefresherSection extends StatelessWidget {
+  const _RefresherSection({required this.title, required this.items});
+
+  final String title;
+  final List<String> items;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 250,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+        const SizedBox(height: 6),
+        if (items.isEmpty)
+          const Text(
+            'No verified details available.',
+            style: TextStyle(color: AppColors.muted),
+          )
+        else
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text('• $item', style: const TextStyle(height: 1.35)),
+            ),
+      ],
+    ),
   );
 }
 

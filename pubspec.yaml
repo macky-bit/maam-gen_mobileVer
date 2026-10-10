@@ -38,6 +38,8 @@ dependencies:
   shared_preferences: ^2.5.5
   url_launcher: ^6.3.2
   video_player: ^2.10.1
+  youtube_player_iframe: ^6.0.2
+  image_picker: ^1.2.4
 
 dev_dependencies:
   flutter_test:

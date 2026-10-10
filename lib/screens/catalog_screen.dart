@@ -5,6 +5,7 @@ import '../services/watch_history_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/network_art.dart';
 import '../widgets/show_card.dart';
+import '../widgets/trailer_preview.dart';
 
 class CatalogScreen extends StatelessWidget {
   const CatalogScreen({
@@ -190,7 +191,7 @@ class _HeroBanner extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          NetworkArt(url: show.backdropUrl, fit: BoxFit.cover),
+          TrailerPreview(show: show),
           const DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(

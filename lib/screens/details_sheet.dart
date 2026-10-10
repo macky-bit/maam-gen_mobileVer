@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/show.dart';
 import '../models/member_profile.dart';
 import '../theme/app_theme.dart';
-import '../widgets/network_art.dart';
+import '../widgets/trailer_preview.dart';
 import 'watch_screen.dart';
 
 Future<void> showDetailsSheet(
@@ -83,7 +83,7 @@ class _DetailsSheetState extends State<_DetailsSheet> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    NetworkArt(url: show.backdropUrl, fit: BoxFit.cover),
+                    TrailerPreview(show: show, showControls: true),
                     const DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(

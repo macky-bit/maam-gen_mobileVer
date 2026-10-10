@@ -10,6 +10,29 @@ class TmdbException implements Exception {
   String toString() => message;
 }
 
+String? selectTrailerKey(List<dynamic> videos) {
+  final youtube = videos
+      .whereType<Map<String, dynamic>>()
+      .where(
+        (video) =>
+            video['site'] == 'YouTube' &&
+            video['key'] is String &&
+            (video['key'] as String).isNotEmpty,
+      )
+      .toList(growable: false);
+  for (final matches in [
+    (Map<String, dynamic> video) =>
+        video['type'] == 'Trailer' && video['official'] == true,
+    (Map<String, dynamic> video) => video['type'] == 'Trailer',
+    (Map<String, dynamic> video) => video['type'] == 'Teaser',
+    (Map<String, dynamic> video) => true,
+  ]) {
+    final match = youtube.where(matches).firstOrNull;
+    if (match != null) return match['key'] as String;
+  }
+  return null;
+}
+
 class TmdbService {
   TmdbService({HttpClient? client, this.kidsMode = false})
     : _client = client ?? HttpClient();
@@ -187,6 +210,16 @@ class TmdbService {
             )
             .toList(),
       );
+
+  Future<String?> trailerKey(Show show) async {
+    try {
+      final type = show.mediaType == 'tv' ? 'tv' : 'movie';
+      final data = await _get('/$type/${show.id}/videos');
+      return selectTrailerKey(data['results'] as List<dynamic>? ?? const []);
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<List<Episode>> episodes(int tvId) async {
     final details = await _get('/tv/$tvId');

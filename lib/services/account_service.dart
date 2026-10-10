@@ -1,4 +1,68 @@
+import 'dart:typed_data';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+const feedbackAttachmentBucket = 'feedback-attachments';
+const maxFeedbackAttachmentBytes = 5 * 1024 * 1024;
+const _allowedFeedbackImageTypes = {
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+};
+
+class SupportAttachment {
+  const SupportAttachment({
+    required this.name,
+    required this.mimeType,
+    required this.bytes,
+  });
+
+  final String name;
+  final String mimeType;
+  final Uint8List bytes;
+}
+
+class SupportAttachmentValidationException implements Exception {
+  const SupportAttachmentValidationException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+void validateSupportAttachment(SupportAttachment? attachment) {
+  if (attachment == null) return;
+  validateSupportAttachmentMetadata(
+    mimeType: attachment.mimeType,
+    sizeInBytes: attachment.bytes.lengthInBytes,
+  );
+}
+
+void validateSupportAttachmentMetadata({
+  required String mimeType,
+  required int sizeInBytes,
+}) {
+  if (!_allowedFeedbackImageTypes.contains(mimeType.toLowerCase())) {
+    throw const SupportAttachmentValidationException(
+      'Attach a PNG, JPG, WebP, or GIF image.',
+    );
+  }
+  if (sizeInBytes > maxFeedbackAttachmentBytes) {
+    throw const SupportAttachmentValidationException(
+      'Attachments must be 5 MB or smaller.',
+    );
+  }
+}
+
+String _safeFeedbackFilename(String name) {
+  final safe = name
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9._-]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+  return safe.isEmpty ? 'attachment' : safe;
+}
 
 class BillingTransaction {
   const BillingTransaction({
@@ -188,7 +252,9 @@ class AccountService {
   Future<void> submitSupportRequest({
     required String subject,
     required String description,
+    SupportAttachment? attachment,
   }) async {
+    validateSupportAttachment(attachment);
     final user = client.auth.currentUser;
     if (user == null) throw StateError('Sign in to contact support.');
     final account = await client
@@ -196,13 +262,44 @@ class AccountService {
         .select('user_id')
         .eq('auth_user_id', user.id)
         .single();
-    await client.from('platform_feedback').insert({
-      'user_id': account['user_id'],
-      'feedback_type': 'Support Request',
-      'subject': subject.trim(),
-      'description': '[Mobile app]\n${description.trim()}',
-      'screenshot': null,
-      'status': 'Open',
-    });
+    final accountId = account['user_id'];
+    String? attachmentPath;
+    if (attachment != null) {
+      attachmentPath =
+          '$accountId/${DateTime.now().microsecondsSinceEpoch}-'
+          '${_safeFeedbackFilename(attachment.name)}';
+      await client.storage
+          .from(feedbackAttachmentBucket)
+          .uploadBinary(
+            attachmentPath,
+            attachment.bytes,
+            fileOptions: FileOptions(
+              contentType: attachment.mimeType,
+              upsert: false,
+            ),
+          );
+    }
+
+    try {
+      await client.from('platform_feedback').insert({
+        'user_id': accountId,
+        'feedback_type': 'Support Request',
+        'subject': subject.trim(),
+        'description': '[Mobile app]\n${description.trim()}',
+        'screenshot': attachmentPath,
+        'status': 'Open',
+      });
+    } catch (_) {
+      if (attachmentPath != null) {
+        try {
+          await client.storage.from(feedbackAttachmentBucket).remove([
+            attachmentPath,
+          ]);
+        } catch (_) {
+          // Keep the original database error if cleanup also fails.
+        }
+      }
+      rethrow;
+    }
   }
 }

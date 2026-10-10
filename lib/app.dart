@@ -8,6 +8,7 @@ import 'models/subscription_plan.dart';
 import 'models/member_profile.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_shell.dart';
+import 'screens/opening_video_screen.dart';
 import 'screens/google_onboarding_screen.dart';
 import 'screens/reset_password_screen.dart';
 import 'screens/subscription_screen.dart';
@@ -83,6 +84,7 @@ class _StreamFlixAppState extends State<StreamFlixApp>
         widget.supabase?.auth.currentSession != null &&
         _page != _AppPage.login &&
         _page != _AppPage.resetPassword &&
+        _page != _AppPage.opening &&
         _page != _AppPage.loading) {
       unawaited(_routeAuthenticatedSession(preserveActivePage: true));
     }
@@ -355,6 +357,11 @@ class _StreamFlixAppState extends State<StreamFlixApp>
             onSubmit: _completeGoogleOnboarding,
             onSignOut: _signOut,
           ),
+          _AppPage.opening => OpeningVideoScreen(
+            key: const ValueKey('opening'),
+            supabase: widget.supabase!,
+            onComplete: () => setState(() => _page = _AppPage.main),
+          ),
           _AppPage.subscription => SubscriptionScreen(
             key: const ValueKey('subscription'),
             plans: _plans,
@@ -369,7 +376,7 @@ class _StreamFlixAppState extends State<StreamFlixApp>
                 : () => setState(() => _page = _AppPage.main),
             onContinue: (profile) => setState(() {
               _activeProfile = profile;
-              _page = _AppPage.main;
+              _page = _AppPage.opening;
             }),
           ),
           _AppPage.main => MainShell(
@@ -440,6 +447,7 @@ enum _AppPage {
   login,
   resetPassword,
   googleOnboarding,
+  opening,
   subscription,
   profiles,
   main,

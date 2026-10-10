@@ -20,6 +20,7 @@ class ProfileScreen extends StatefulWidget {
     required this.onSubscriptionChanged,
     required this.onWatchHistoryChanged,
     required this.onSignOut,
+    this.signOutOtherDevices,
   });
 
   final SupabaseClient supabase;
@@ -31,6 +32,7 @@ class ProfileScreen extends StatefulWidget {
   final Future<void> Function() onSubscriptionChanged;
   final VoidCallback onWatchHistoryChanged;
   final VoidCallback onSignOut;
+  final Future<void> Function()? signOutOtherDevices;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -38,6 +40,7 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   late MemberProfile activeProfile;
+  bool _signingOutOthers = false;
   SupabaseClient get supabase => widget.supabase;
   String get userId => widget.userId;
   VoidCallback get onManageProfiles => widget.onManageProfiles;
@@ -76,6 +79,55 @@ class _ProfileScreenState extends State<ProfileScreen> {
         onDeleted: widget.onActiveProfileDeleted,
       ),
     );
+  }
+
+  Future<void> _signOutOtherDevices() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Sign out other devices?'),
+        content: const Text(
+          'Every other StreamFlix session will need to sign in again. '
+          'This device will remain signed in.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Sign out others'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _signingOutOthers = true);
+    try {
+      await (widget.signOutOtherDevices?.call() ??
+          supabase.auth.signOut(scope: SignOutScope.others));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Other devices signed out. This device remains active.',
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Other devices could not be signed out.'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _signingOutOthers = false);
+    }
   }
 
   @override
@@ -165,6 +217,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               onSubscriptionCanceled: widget.onSubscriptionChanged,
             ),
           ),
+        ),
+        _SettingsTile(
+          icon: Icons.devices_other_rounded,
+          title: 'Sign out other devices',
+          subtitle: 'Keep this device signed in',
+          trailing: _signingOutOthers ? 'Signing out…' : null,
+          onTap: _signingOutOthers ? null : _signOutOtherDevices,
         ),
         const SizedBox(height: 22),
         const _SectionLabel('PREFERENCES'),

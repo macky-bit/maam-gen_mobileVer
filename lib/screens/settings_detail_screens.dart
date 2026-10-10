@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -17,6 +18,8 @@ typedef AccountProfileUpdater =
       required String lastName,
       required DateTime birthDate,
     });
+
+typedef SupportAttachmentPicker = Future<SupportAttachment?> Function();
 
 String _dateLabel(DateTime? value) {
   if (value == null) return 'Not set';
@@ -1323,9 +1326,10 @@ class _ParentalControlsScreenState extends State<ParentalControlsScreen> {
 }
 
 class HelpCenterScreen extends StatefulWidget {
-  const HelpCenterScreen({super.key, this.supabase});
+  const HelpCenterScreen({super.key, this.supabase, this.pickAttachment});
 
   final SupabaseClient? supabase;
+  final SupportAttachmentPicker? pickAttachment;
 
   @override
   State<HelpCenterScreen> createState() => _HelpCenterScreenState();
@@ -1454,57 +1458,143 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
   Future<void> _openContactForm(BuildContext context) async {
     final subject = TextEditingController();
     final description = TextEditingController();
+    SupportAttachment? attachment;
+    String? attachmentError;
     final submitted =
-        await showModalBottomSheet<({String subject, String description})>(
+        await showModalBottomSheet<
+          ({String subject, String description, SupportAttachment? attachment})
+        >(
           context: context,
           isScrollControlled: true,
           showDragHandle: true,
           backgroundColor: AppColors.inkSoft,
-          builder: (sheetContext) => Padding(
-            padding: EdgeInsets.fromLTRB(
-              24,
-              4,
-              24,
-              MediaQuery.viewInsetsOf(sheetContext).bottom + 24,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Contact support',
-                  style: Theme.of(sheetContext).textTheme.titleLarge,
+          builder: (sheetContext) => StatefulBuilder(
+            builder: (sheetContext, setSheetState) => Padding(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                4,
+                24,
+                MediaQuery.viewInsetsOf(sheetContext).bottom + 24,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Contact support',
+                      style: Theme.of(sheetContext).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: subject,
+                      maxLength: 50,
+                      decoration: const InputDecoration(labelText: 'Subject'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: description,
+                      maxLines: 4,
+                      maxLength: 200,
+                      decoration: const InputDecoration(
+                        labelText: 'Describe the issue',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        try {
+                          final picked =
+                              await (widget.pickAttachment ??
+                                  _pickFeedbackAttachment)();
+                          if (picked == null || !sheetContext.mounted) return;
+                          validateSupportAttachment(picked);
+                          setSheetState(() {
+                            attachment = picked;
+                            attachmentError = null;
+                          });
+                        } on SupportAttachmentValidationException catch (
+                          error
+                        ) {
+                          if (!sheetContext.mounted) return;
+                          setSheetState(() {
+                            attachment = null;
+                            attachmentError = error.message;
+                          });
+                        } catch (_) {
+                          if (!sheetContext.mounted) return;
+                          setSheetState(() {
+                            attachment = null;
+                            attachmentError = 'Could not open that image.';
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.attach_file_rounded),
+                      label: Text(
+                        attachment == null
+                            ? 'Attach image (optional)'
+                            : 'Replace image',
+                      ),
+                    ),
+                    if (attachment != null)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.image_outlined),
+                        title: Text(
+                          attachment!.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          '${(attachment!.bytes.lengthInBytes / 1024 / 1024).toStringAsFixed(2)} MB',
+                        ),
+                        trailing: IconButton(
+                          tooltip: 'Remove attachment',
+                          onPressed: () =>
+                              setSheetState(() => attachment = null),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      )
+                    else
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text(
+                          'PNG, JPG, WebP, or GIF · 5 MB maximum',
+                          style: TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    if (attachmentError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          attachmentError!,
+                          style: TextStyle(
+                            color: Theme.of(sheetContext).colorScheme.error,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 18),
+                    FilledButton(
+                      onPressed: () {
+                        if (subject.text.trim().isEmpty ||
+                            description.text.trim().isEmpty) {
+                          return;
+                        }
+                        Navigator.pop(sheetContext, (
+                          subject: subject.text.trim(),
+                          description: description.text.trim(),
+                          attachment: attachment,
+                        ));
+                      },
+                      child: const Text('Submit request'),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: subject,
-                  maxLength: 50,
-                  decoration: const InputDecoration(labelText: 'Subject'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: description,
-                  maxLines: 4,
-                  maxLength: 200,
-                  decoration: const InputDecoration(
-                    labelText: 'Describe the issue',
-                  ),
-                ),
-                const SizedBox(height: 18),
-                FilledButton(
-                  onPressed: () {
-                    if (subject.text.trim().isEmpty ||
-                        description.text.trim().isEmpty) {
-                      return;
-                    }
-                    Navigator.pop(sheetContext, (
-                      subject: subject.text.trim(),
-                      description: description.text.trim(),
-                    ));
-                  },
-                  child: const Text('Submit request'),
-                ),
-              ],
+              ),
             ),
           ),
         );
@@ -1517,6 +1607,7 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
         await AccountService(client).submitSupportRequest(
           subject: submitted.subject,
           description: submitted.description,
+          attachment: submitted.attachment,
         );
         if (!mounted) return;
         ScaffoldMessenger.of(this.context).showSnackBar(
@@ -1532,6 +1623,35 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
         );
       }
     }
+  }
+
+  Future<SupportAttachment?> _pickFeedbackAttachment() async {
+    final image = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      requestFullMetadata: false,
+    );
+    if (image == null) return null;
+    final mimeType = image.mimeType ?? _imageMimeTypeFromName(image.name);
+    validateSupportAttachmentMetadata(
+      mimeType: mimeType,
+      sizeInBytes: await image.length(),
+    );
+    return SupportAttachment(
+      name: image.name,
+      mimeType: mimeType,
+      bytes: await image.readAsBytes(),
+    );
+  }
+
+  String _imageMimeTypeFromName(String name) {
+    final lowerName = name.toLowerCase();
+    if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) {
+      return 'image/jpeg';
+    }
+    if (lowerName.endsWith('.png')) return 'image/png';
+    if (lowerName.endsWith('.webp')) return 'image/webp';
+    if (lowerName.endsWith('.gif')) return 'image/gif';
+    return '';
   }
 }
 
