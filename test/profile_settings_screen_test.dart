@@ -24,7 +24,8 @@ void main() {
       activeProfile: profile,
       onActiveProfileUpdated: (_) {},
       onManageProfiles: () {},
-      onClearWatchHistory: () {},
+      onSubscriptionChanged: () async {},
+      onWatchHistoryChanged: () {},
       onSignOut: () {},
     ),
   );
@@ -43,6 +44,7 @@ void main() {
     expect(find.text('Account details'), findsOneWidget);
     expect(find.text('Profiles'), findsOneWidget);
     expect(find.text('Playback & privacy'), findsOneWidget);
+    expect(find.text('Watch history'), findsOneWidget);
     expect(find.byTooltip('Edit active profile'), findsOneWidget);
     expect(find.text('Devices'), findsNothing);
     expect(find.text('Notifications'), findsNothing);

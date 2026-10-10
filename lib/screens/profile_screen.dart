@@ -6,6 +6,7 @@ import '../theme/app_theme.dart';
 import '../widgets/brand_logo.dart';
 import 'active_profile_editor_screen.dart';
 import 'settings_detail_screens.dart';
+import 'watch_history_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
@@ -15,7 +16,8 @@ class ProfileScreen extends StatefulWidget {
     required this.activeProfile,
     required this.onActiveProfileUpdated,
     required this.onManageProfiles,
-    required this.onClearWatchHistory,
+    required this.onSubscriptionChanged,
+    required this.onWatchHistoryChanged,
     required this.onSignOut,
   });
 
@@ -24,7 +26,8 @@ class ProfileScreen extends StatefulWidget {
   final MemberProfile activeProfile;
   final ValueChanged<MemberProfile> onActiveProfileUpdated;
   final VoidCallback onManageProfiles;
-  final VoidCallback onClearWatchHistory;
+  final Future<void> Function() onSubscriptionChanged;
+  final VoidCallback onWatchHistoryChanged;
   final VoidCallback onSignOut;
 
   @override
@@ -36,7 +39,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   SupabaseClient get supabase => widget.supabase;
   String get userId => widget.userId;
   VoidCallback get onManageProfiles => widget.onManageProfiles;
-  VoidCallback get onClearWatchHistory => widget.onClearWatchHistory;
   VoidCallback get onSignOut => widget.onSignOut;
 
   @override
@@ -153,8 +155,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
           title: 'Subscription',
           subtitle: 'Membership and billing details',
           trailing: 'Manage',
-          onTap: () =>
-              _open(context, SubscriptionDetailsScreen(supabase: supabase)),
+          onTap: () => _open(
+            context,
+            SubscriptionDetailsScreen(
+              supabase: supabase,
+              onSubscriptionCanceled: widget.onSubscriptionChanged,
+            ),
+          ),
         ),
         const SizedBox(height: 22),
         const _SectionLabel('PREFERENCES'),
@@ -162,11 +169,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
           icon: Icons.play_circle_outline_rounded,
           title: 'Playback & privacy',
           subtitle: 'Autoplay, quality, history and subtitles',
+          onTap: () => _open(context, PlaybackPrivacyScreen(userId: userId)),
+        ),
+        _SettingsTile(
+          icon: Icons.history_rounded,
+          title: 'Watch history',
+          subtitle: 'View activity and remove individual titles',
           onTap: () => _open(
             context,
-            PlaybackPrivacyScreen(
-              userId: userId,
-              onClearWatchHistory: onClearWatchHistory,
+            WatchHistoryScreen(
+              supabase: supabase,
+              onChanged: widget.onWatchHistoryChanged,
             ),
           ),
         ),

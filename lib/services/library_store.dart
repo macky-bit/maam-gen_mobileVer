@@ -11,21 +11,9 @@ class LibraryStore {
   final int profileId;
 
   String get _myListKey => 'sf_mylist_v1_${userId}_$profileId';
-  String get _continueKey => 'sf_continue_v1_${userId}_$profileId';
-
   Future<List<Show>> loadMyList() => _load(_myListKey);
 
-  Future<List<Show>> loadContinueWatching() => _load(_continueKey);
-
   Future<void> saveMyList(Iterable<Show> shows) => _save(_myListKey, shows);
-
-  Future<void> saveContinueWatching(Iterable<Show> shows) =>
-      _save(_continueKey, shows.take(10));
-
-  Future<void> clearContinueWatching() async {
-    final preferences = await SharedPreferences.getInstance();
-    await preferences.remove(_continueKey);
-  }
 
   Future<List<Show>> _load(String key) async {
     final preferences = await SharedPreferences.getInstance();

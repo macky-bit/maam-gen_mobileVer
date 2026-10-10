@@ -1,9 +1,23 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_flix/models/subscription_plan.dart';
+import 'package:stream_flix/models/playback_quality.dart';
 import 'package:stream_flix/services/account_service.dart';
 import 'package:stream_flix/services/subscription_service.dart';
 
 void main() {
+  test('limits demo playback quality to the active plan', () {
+    expect(playbackQualitiesForPlan('Basic'), [480]);
+    expect(playbackQualitiesForPlan('Standard'), [480, 720]);
+    expect(playbackQualitiesForPlan('Premium'), [480, 720, 1080]);
+    expect(preferredPlaybackQuality('Premium'), 1080);
+    expect(requiredPlanForQuality(1080), 'Premium');
+  });
+
+  test('plan changes exclude the active subscription', () {
+    final changes = availablePlanChanges(fallbackSubscriptionPlans, 2);
+    expect(changes.map((plan) => plan.id), isNot(contains(2)));
+    expect(changes, hasLength(fallbackSubscriptionPlans.length - 1));
+  });
   test('maps a database plan and formats its peso price', () {
     final plan = SubscriptionPlan.fromJson({
       'subscription_id': 2,

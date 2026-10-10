@@ -23,10 +23,15 @@ class Show {
   final bool isAdult;
   final List<int> genreIds;
 
-  String get posterUrl =>
-      posterPath.isEmpty ? '' : 'https://image.tmdb.org/t/p/w500$posterPath';
+  String get posterUrl => posterPath.isEmpty
+      ? ''
+      : posterPath.startsWith('http')
+      ? posterPath
+      : 'https://image.tmdb.org/t/p/w500$posterPath';
   String get backdropUrl => backdropPath.isEmpty
       ? posterUrl
+      : backdropPath.startsWith('http')
+      ? backdropPath
       : 'https://image.tmdb.org/t/p/w1280$backdropPath';
 
   bool get isKidsAppropriate {

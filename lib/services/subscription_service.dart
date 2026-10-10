@@ -63,7 +63,7 @@ class SubscriptionService {
   ) async {
     final response = await client.functions.invoke(
       'create-checkout-session',
-      body: {'planId': plan.id},
+      body: {'planId': plan.id, 'mobile': true},
     );
     final data = response.data;
     if (data is! Map) {
@@ -80,7 +80,23 @@ class SubscriptionService {
     }
     return SubscriptionCheckoutResult(checkoutUrl: checkoutUrl);
   }
+
+  Future<void> cancel() async {
+    final response = await client.functions.invoke(
+      'cancel-subscription',
+      body: {'mobile': true},
+    );
+    final data = response.data;
+    if (data is! Map || data['canceled'] != true) {
+      throw StateError('The subscription could not be canceled.');
+    }
+  }
 }
+
+List<SubscriptionPlan> availablePlanChanges(
+  List<SubscriptionPlan> plans,
+  int? currentPlanId,
+) => plans.where((plan) => plan.id != currentPlanId).toList(growable: false);
 
 class SubscriptionCheckoutResult {
   const SubscriptionCheckoutResult({this.updated = false, this.checkoutUrl});

@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:stream_flix/models/show.dart';
 import 'package:stream_flix/services/library_store.dart';
+import 'package:stream_flix/services/watch_history_service.dart';
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -27,27 +28,21 @@ void main() {
     expect(await second.loadMyList(), isEmpty);
   });
 
-  test('continue watching is capped at ten recent titles', () async {
-    const store = LibraryStore(userId: 'user', profileId: 1);
-    final shows = List.generate(
-      12,
-      (index) => Show(
-        id: index + 1,
-        title: 'Title $index',
-        overview: '',
-        posterPath: '/poster.jpg',
-        backdropPath: '',
-        year: '2026',
-        score: 80,
-        mediaType: 'movie',
-      ),
+  test('server history exposes the real playback fraction', () {
+    const entry = WatchHistoryEntry(
+      contentId: 7,
+      title: 'A title',
+      thumbnail: '',
+      watchedAt: null,
+      lastPlaybackSeconds: 900,
+      runtimeMinutes: 60,
     );
+    expect(entry.progress, .25);
+  });
 
-    await store.saveContinueWatching(shows);
-
-    final restored = await store.loadContinueWatching();
-    expect(restored, hasLength(10));
-    expect(restored.first.id, 1);
-    expect(restored.last.id, 10);
+  test('show artwork accepts server-provided absolute URLs', () {
+    const absolute = 'https://image.tmdb.org/t/p/w500/poster.jpg';
+    final restored = Show.fromJson({...show.toJson(), 'poster_path': absolute});
+    expect(restored.posterUrl, absolute);
   });
 }

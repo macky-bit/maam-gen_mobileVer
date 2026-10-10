@@ -423,3 +423,6 @@ enabled = true
 
 [functions.sync-tmdb-catalog]
 verify_jwt = false
+
+[functions.stripe-mobile-return]
+verify_jwt = false

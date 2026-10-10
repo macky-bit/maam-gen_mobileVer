@@ -31,6 +31,8 @@ class _StreamFlixAppState extends State<StreamFlixApp>
   List<SubscriptionPlan> _plans = fallbackSubscriptionPlans;
   String? _subscriptionError;
   bool _isResolvingSubscription = false;
+  bool _checkoutPending = false;
+  String _planName = 'Basic';
   MemberProfile? _activeProfile;
   Timer? _expiryTimer;
   StreamSubscription<AuthState>? _authSubscription;
@@ -243,7 +245,13 @@ class _StreamFlixAppState extends State<StreamFlixApp>
       if (plans.isEmpty) {
         throw StateError('No subscription plans are available.');
       }
-      final status = await service.fetchStatus();
+      var status = await service.fetchStatus();
+      if (_checkoutPending && !status.isActive) {
+        for (var attempt = 0; attempt < 10 && !status.isActive; attempt++) {
+          await Future<void>.delayed(const Duration(seconds: 1));
+          status = await service.fetchStatus();
+        }
+      }
       final activePlan = status.isActive
           ? plans.where((plan) => plan.id == status.subscriptionId).firstOrNull
           : null;
@@ -253,6 +261,7 @@ class _StreamFlixAppState extends State<StreamFlixApp>
       if (!mounted || _page == _AppPage.resetPassword) return;
       setState(() {
         _plans = plans;
+        _planName = activePlan?.name ?? 'Basic';
         _page = activePlan == null
             ? _AppPage.subscription
             : preserveActivePage &&
@@ -262,6 +271,7 @@ class _StreamFlixAppState extends State<StreamFlixApp>
             : _AppPage.profiles;
       });
       _scheduleExpiry(status.isActive ? status.endDate : null);
+      _checkoutPending = false;
     } catch (_) {
       if (!mounted || _page == _AppPage.resetPassword) return;
       setState(() {
@@ -282,16 +292,20 @@ class _StreamFlixAppState extends State<StreamFlixApp>
     final checkout = await service.startCheckout(plan);
     if (!checkout.updated) {
       final uri = checkout.checkoutUrl;
+      _checkoutPending = true;
       if (uri == null ||
           !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        _checkoutPending = false;
         throw StateError('Stripe Checkout could not be opened.');
       }
       return false;
     }
+    _checkoutPending = false;
     final status = await service.fetchStatus();
     if (!status.isActive) throw StateError('Subscription is not active.');
     if (!mounted) return true;
     setState(() {
+      _planName = status.planName ?? plan.name;
       _page = _AppPage.profiles;
     });
     _scheduleExpiry(status.endDate);
@@ -362,9 +376,12 @@ class _StreamFlixAppState extends State<StreamFlixApp>
             key: const ValueKey('main'),
             supabase: widget.supabase!,
             activeProfile: _activeProfile!,
+            planName: _planName,
             onProfileChanged: (profile) =>
                 setState(() => _activeProfile = profile),
             onManageProfiles: () => setState(() => _page = _AppPage.profiles),
+            onSubscriptionChanged: () =>
+                _resolveSubscription(preserveActivePage: true),
             onSignOut: _signOut,
           ),
         },

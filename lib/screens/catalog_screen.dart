@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/show.dart';
+import '../services/watch_history_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/network_art.dart';
 import '../widgets/show_card.dart';
@@ -18,7 +19,7 @@ class CatalogScreen extends StatelessWidget {
   final Future<CatalogData> catalog;
   final ValueChanged<Show> onSelect;
   final Future<void> Function() onRefresh;
-  final List<Show> continueWatching;
+  final List<WatchHistoryEntry> continueWatching;
   final bool showHero;
 
   @override
@@ -83,7 +84,7 @@ class CatalogScreen extends StatelessWidget {
 class _ContinueWatchingRow extends StatelessWidget {
   const _ContinueWatchingRow({required this.items, required this.onSelect});
 
-  final List<Show> items;
+  final List<WatchHistoryEntry> items;
   final ValueChanged<Show> onSelect;
 
   @override
@@ -108,7 +109,8 @@ class _ContinueWatchingRow extends StatelessWidget {
             itemCount: items.length,
             separatorBuilder: (_, _) => const SizedBox(width: 12),
             itemBuilder: (context, index) {
-              final show = items[index];
+              final entry = items[index];
+              final show = entry.show!;
               return InkWell(
                 onTap: () => onSelect(show),
                 borderRadius: BorderRadius.circular(12),
@@ -153,12 +155,12 @@ class _ContinueWatchingRow extends StatelessWidget {
                           ),
                         ),
                       ),
-                      const Positioned(
+                      Positioned(
                         left: 0,
                         right: 0,
                         bottom: 0,
                         child: LinearProgressIndicator(
-                          value: .08,
+                          value: entry.progress,
                           minHeight: 3,
                           color: AppColors.gold,
                           backgroundColor: Colors.white24,

@@ -4,18 +4,32 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
 
+import '../models/playback_quality.dart';
+import '../models/member_profile.dart';
 import '../models/show.dart';
+import '../services/community_service.dart';
 import '../services/tmdb_service.dart';
+import '../services/watch_history_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/network_art.dart';
 
 enum _WatchPanel { player, episodes, refresher, reactions, community }
 
 class WatchScreen extends StatefulWidget {
-  const WatchScreen({super.key, required this.show});
+  const WatchScreen({
+    super.key,
+    required this.show,
+    required this.activeProfile,
+    required this.planName,
+    required this.initialPosition,
+  });
 
   final Show show;
+  final MemberProfile activeProfile;
+  final String planName;
+  final Duration initialPosition;
 
   @override
   State<WatchScreen> createState() => _WatchScreenState();
@@ -23,32 +37,36 @@ class WatchScreen extends StatefulWidget {
 
 class _WatchScreenState extends State<WatchScreen> {
   final _service = TmdbService();
+  late final WatchHistoryService _watchHistory;
+  late final CommunityService _community;
   final _commentController = TextEditingController();
-  final List<String> _comments = [];
-  final Map<String, int> _reactions = {
-    '\u{1F44D}': 25,
-    '\u2764\uFE0F': 0,
-    '\u{1F970}': 0,
-    '\u{1F602}': 0,
-    '\u{1F62E}': 0,
-    '\u{1F622}': 0,
-    '\u{1F621}': 0,
-  };
+  List<CommunityComment> _comments = const [];
+  Map<String, int> _reactions = emptyReactionCounts();
 
   late Future<List<Episode>> _episodesFuture;
   List<Episode> _episodes = const [];
-  Timer? _timer;
+  VideoPlayerController? _video;
+  int _videoLoad = 0;
   _WatchPanel _panel = _WatchPanel.player;
-  bool _playing = true;
   bool _muted = false;
   bool _captions = false;
   bool _showRefresherDetails = false;
   bool _controlsVisible = true;
-  double _progress = .08;
   double _volume = .8;
   int _episodeIndex = 0;
-  String _quality = '1080p';
+  late int _quality;
+  bool _videoLoading = true;
+  String? _videoError;
+  int? _contentId;
+  int? _lastSyncedSecond;
+  bool _syncingProgress = false;
   String? _myReaction;
+  String? _communityUserId;
+  String? _communityError;
+  bool _communityLoading = true;
+  bool _reactionPending = false;
+  bool _commentPending = false;
+  String? _commentActionPending;
   late Future<_SoundtrackEntry> _soundtrack;
   bool _soundtrackPrimed = false;
 
@@ -56,6 +74,18 @@ class _WatchScreenState extends State<WatchScreen> {
   Episode? get _episode => _episodes.isEmpty
       ? null
       : _episodes[_episodeIndex.clamp(0, _episodes.length - 1)];
+  List<int> get _allowedQualities => playbackQualitiesForPlan(widget.planName);
+  bool get _playing => _video?.value.isPlaying ?? false;
+  double get _progress {
+    final value = _video?.value;
+    if (value == null ||
+        !value.isInitialized ||
+        value.duration.inMilliseconds == 0) {
+      return 0;
+    }
+    return (value.position.inMilliseconds / value.duration.inMilliseconds)
+        .clamp(0, 1);
+  }
 
   @override
   void initState() {
@@ -65,10 +95,14 @@ class _WatchScreenState extends State<WatchScreen> {
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() => _progress = (_progress + .0015).clamp(0, 1));
-    });
+    final client = Supabase.instance.client;
+    _watchHistory = WatchHistoryService(client);
+    _community = CommunityService(client);
+    _quality = preferredPlaybackQuality(widget.planName);
+    unawaited(
+      _loadVideo(_quality, position: widget.initialPosition, autoplay: true),
+    );
+    unawaited(_resolveContent());
     _episodesFuture = _isSeries
         ? _service.episodes(widget.show.id).then((items) {
             if (mounted) setState(() => _episodes = items);
@@ -139,51 +173,239 @@ class _WatchScreenState extends State<WatchScreen> {
     }
   }
 
-  void _selectReaction(String reaction) {
+  Future<void> _selectReaction(String reaction) async {
+    final contentId = _contentId;
+    final userId = _communityUserId;
+    if (_reactionPending || contentId == null || userId == null) return;
+    final previous = _myReaction;
+    final previousCounts = _reactions;
+    final next = previous == reaction ? null : reaction;
+    final optimistic = optimisticReaction(previousCounts, previous, next);
     setState(() {
-      if (_myReaction != null) {
-        _reactions[_myReaction!] = (_reactions[_myReaction!]! - 1).clamp(
-          0,
-          999,
-        );
-      }
-      if (_myReaction == reaction) {
-        _myReaction = null;
-      } else {
-        _myReaction = reaction;
-        _reactions[reaction] = _reactions[reaction]! + 1;
-      }
-      _panel = _WatchPanel.player;
+      _reactions = optimistic.counts;
+      _myReaction = optimistic.myReaction;
+      _reactionPending = true;
+      _communityError = null;
     });
+    try {
+      await _community.saveReaction(
+        contentId: contentId,
+        userId: userId,
+        previous: previous,
+        next: next,
+      );
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _reactions = previousCounts;
+          _myReaction = previous;
+          _communityError = _communityMessage(
+            error,
+            'Unable to save your reaction.',
+          );
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _reactionPending = false);
+    }
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    final contentId = _contentId;
+    final seconds = _video?.value.position.inSeconds ?? 0;
+    if (contentId != null && seconds > 0 && seconds != _lastSyncedSecond) {
+      unawaited(_watchHistory.recordProgress(contentId, seconds));
+    }
+    _videoLoad++;
+    _video?.removeListener(_onVideoChanged);
+    final video = _video;
+    if (video != null) {
+      unawaited(video.dispose());
+    }
     _commentController.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations(const [DeviceOrientation.portraitUp]);
     super.dispose();
   }
 
-  void _togglePlaying() {
-    setState(() => _playing = !_playing);
-    _timer?.cancel();
-    if (_playing) {
-      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (!mounted) return;
-        setState(() => _progress = (_progress + .0015).clamp(0, 1));
+  Future<void> _loadVideo(
+    int quality, {
+    Duration position = Duration.zero,
+    bool autoplay = false,
+  }) async {
+    final request = ++_videoLoad;
+    if (mounted) {
+      setState(() {
+        _videoLoading = true;
+        _videoError = null;
       });
     }
+    final next = VideoPlayerController.asset(playbackAssetForQuality(quality));
+    try {
+      await next.initialize();
+      if (!mounted || request != _videoLoad) {
+        await next.dispose();
+        return;
+      }
+      await next.setVolume(_muted ? 0 : _volume);
+      if (position > Duration.zero) {
+        await next.seekTo(
+          position < next.value.duration ? position : Duration.zero,
+        );
+      }
+      final previous = _video;
+      previous?.removeListener(_onVideoChanged);
+      _video = next..addListener(_onVideoChanged);
+      _quality = quality;
+      await previous?.dispose();
+      if (autoplay) await next.play();
+      if (mounted) setState(() => _videoLoading = false);
+    } catch (_) {
+      await next.dispose();
+      if (mounted && request == _videoLoad) {
+        setState(() {
+          _videoLoading = false;
+          _videoError = '${quality}p studio demo could not be loaded.';
+        });
+      }
+    }
+  }
+
+  void _onVideoChanged() {
+    final value = _video?.value;
+    if (!mounted || value == null) return;
+    final error = value.hasError ? value.errorDescription : null;
+    if (value.isPlaying && value.position.inSeconds > 0) {
+      unawaited(_syncProgress(value.position.inSeconds));
+    }
+    setState(() => _videoError = error);
+  }
+
+  Future<void> _resolveContent() async {
+    try {
+      final contentId = await _watchHistory.resolveContentId(widget.show);
+      if (!mounted) return;
+      setState(() => _contentId = contentId);
+      if (contentId == null) {
+        setState(() {
+          _communityLoading = false;
+          _communityError = 'Community is unavailable for this title.';
+        });
+        return;
+      }
+      await _loadCommunity(contentId);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _communityLoading = false;
+          _communityError = _communityMessage(
+            error,
+            'Community could not be loaded.',
+          );
+        });
+      }
+    }
+  }
+
+  Future<void> _loadCommunity(int contentId) async {
+    final snapshot = await _community.load(contentId);
+    if (!mounted || _contentId != contentId) return;
+    setState(() {
+      _reactions = snapshot.counts;
+      _myReaction = snapshot.myReaction;
+      _comments = snapshot.comments;
+      _communityUserId = snapshot.userId;
+      _communityLoading = false;
+      _communityError = null;
+    });
+  }
+
+  Future<void> _syncProgress(int seconds) async {
+    final contentId = _contentId;
+    if (contentId == null ||
+        _syncingProgress ||
+        (_lastSyncedSecond != null &&
+            (seconds - _lastSyncedSecond!).abs() < 15)) {
+      return;
+    }
+    _syncingProgress = true;
+    try {
+      await _watchHistory.recordProgress(contentId, seconds);
+      _lastSyncedSecond = seconds;
+    } catch (_) {
+      // Retry from a later player update instead of interrupting playback.
+    } finally {
+      _syncingProgress = false;
+    }
+  }
+
+  Future<void> _togglePlaying() async {
+    final video = _video;
+    if (video == null || !video.value.isInitialized) return;
+    if (video.value.isPlaying) {
+      await video.pause();
+    } else {
+      if (video.value.position >= video.value.duration) {
+        await video.seekTo(Duration.zero);
+      }
+      await video.play();
+    }
+  }
+
+  Future<void> _seek(double fraction) async {
+    final video = _video;
+    if (video == null || !video.value.isInitialized) return;
+    await video.seekTo(video.value.duration * fraction);
+  }
+
+  Future<void> _seekBy(int seconds) async {
+    final video = _video;
+    if (video == null || !video.value.isInitialized) return;
+    final target = video.value.position + Duration(seconds: seconds);
+    await video.seekTo(
+      target < Duration.zero
+          ? Duration.zero
+          : target > video.value.duration
+          ? video.value.duration
+          : target,
+    );
+  }
+
+  Future<void> _changeQuality(int quality) async {
+    if (!_allowedQualities.contains(quality) || quality == _quality) return;
+    final value = _video?.value;
+    await _loadVideo(
+      quality,
+      position: value?.position ?? Duration.zero,
+      autoplay: value?.isPlaying ?? false,
+    );
+  }
+
+  Future<void> _toggleMuted() async {
+    setState(() => _muted = !_muted);
+    await _video?.setVolume(_muted ? 0 : _volume);
+  }
+
+  Future<void> _setVolume(double value) async {
+    setState(() {
+      _volume = value;
+      _muted = false;
+    });
+    await _video?.setVolume(value);
   }
 
   void _nextEpisode() {
     if (!_isSeries || _episodes.isEmpty) return;
     setState(() {
       _episodeIndex = (_episodeIndex + 1).clamp(0, _episodes.length - 1);
-      _progress = 0;
       _panel = _WatchPanel.player;
     });
+    final video = _video;
+    if (video != null) {
+      unawaited(video.seekTo(Duration.zero));
+      unawaited(video.play());
+    }
   }
 
   void _togglePanel(_WatchPanel panel) {
@@ -192,14 +414,139 @@ class _WatchScreenState extends State<WatchScreen> {
     });
   }
 
-  void _postComment() {
-    final comment = _commentController.text.trim();
-    if (comment.isEmpty) return;
+  Future<void> _postComment() async {
+    final contentId = _contentId;
+    final userId = _communityUserId;
+    if (_commentPending || contentId == null || userId == null) return;
     setState(() {
-      _comments.insert(0, comment);
-      _commentController.clear();
+      _commentPending = true;
+      _communityError = null;
     });
-    FocusScope.of(context).unfocus();
+    try {
+      final created = await _community.postComment(
+        contentId: contentId,
+        userId: userId,
+        profile: widget.activeProfile,
+        text: _commentController.text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _comments = [created, ..._comments];
+        _commentController.clear();
+      });
+      FocusScope.of(context).unfocus();
+    } catch (error) {
+      if (mounted) {
+        setState(
+          () => _communityError = _communityMessage(
+            error,
+            'Unable to post your comment.',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _commentPending = false);
+    }
+  }
+
+  Future<void> _editComment(CommunityComment comment) async {
+    final controller = TextEditingController(text: comment.text);
+    final updatedText = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit comment'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: commentMaxLength,
+          maxLines: 4,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (updatedText == null || _communityUserId == null) return;
+    setState(() => _commentActionPending = comment.id);
+    try {
+      final text = await _community.updateComment(
+        commentId: comment.id,
+        userId: _communityUserId!,
+        text: updatedText,
+      );
+      if (mounted) {
+        setState(() {
+          _comments = _comments
+              .map((item) => item.id == comment.id ? item.copyWith(text: text) : item)
+              .toList(growable: false);
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(
+          () => _communityError = _communityMessage(
+            error,
+            'Unable to update your comment.',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _commentActionPending = null);
+    }
+  }
+
+  Future<void> _deleteComment(CommunityComment comment) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete your comment?'),
+        content: const Text('This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || _communityUserId == null) return;
+    setState(() => _commentActionPending = comment.id);
+    try {
+      await _community.deleteComment(
+        commentId: comment.id,
+        userId: _communityUserId!,
+      );
+      if (mounted) {
+        setState(() {
+          _comments = _comments
+              .where((item) => item.id != comment.id)
+              .toList(growable: false);
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(
+          () => _communityError = _communityMessage(
+            error,
+            'Unable to delete your comment.',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _commentActionPending = null);
+    }
   }
 
   @override
@@ -218,6 +565,13 @@ class _WatchScreenState extends State<WatchScreen> {
           fit: StackFit.expand,
           children: [
             NetworkArt(url: imageUrl, fit: BoxFit.cover),
+            if (_video?.value.isInitialized ?? false)
+              Center(
+                child: AspectRatio(
+                  aspectRatio: _video!.value.aspectRatio,
+                  child: VideoPlayer(_video!),
+                ),
+              ),
             const DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -232,6 +586,21 @@ class _WatchScreenState extends State<WatchScreen> {
                 ),
               ),
             ),
+            if (_videoLoading)
+              const Center(
+                child: CircularProgressIndicator(color: AppColors.gold),
+              ),
+            if (_videoError != null)
+              Positioned(
+                top: 84,
+                left: 24,
+                right: 24,
+                child: Text(
+                  _videoError!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
             if (_panel != _WatchPanel.player &&
                 _panel != _WatchPanel.community &&
                 _panel != _WatchPanel.reactions)
@@ -303,11 +672,13 @@ class _WatchScreenState extends State<WatchScreen> {
                           year: widget.show.year,
                           isSeries: _isSeries,
                           episode: episode,
-                          commentCount:
-                              _comments.length + _CommunityPanel.stagedCount,
+                          quality: _quality,
+                          commentCount: _comments.length,
                           onBack: () => Navigator.pop(context),
                           reaction: _myReaction,
-                          onReaction: () => _selectReaction('\u{1F44D}'),
+                          onReaction: () => unawaited(
+                            _selectReaction('\u{1F44D}'),
+                          ),
                           onReactionLongPress: () =>
                               _togglePanel(_WatchPanel.reactions),
                           onMusic: _handleSoundtrack,
@@ -324,25 +695,22 @@ class _WatchScreenState extends State<WatchScreen> {
                           muted: _muted,
                           captions: _captions,
                           quality: _quality,
+                          planName: widget.planName,
+                          allowedQualities: _allowedQualities,
+                          position: _video?.value.position ?? Duration.zero,
+                          duration: _video?.value.duration ?? Duration.zero,
                           showNext: _isSeries,
                           onPlayPause: _togglePlaying,
-                          onSeek: (value) => setState(() => _progress = value),
-                          onReplay: () => setState(
-                            () => _progress = (_progress - .03).clamp(0, 1),
-                          ),
-                          onForward: () => setState(
-                            () => _progress = (_progress + .03).clamp(0, 1),
-                          ),
+                          onSeek: (value) => unawaited(_seek(value)),
+                          onReplay: () => unawaited(_seekBy(-10)),
+                          onForward: () => unawaited(_seekBy(10)),
                           onNext: _nextEpisode,
-                          onMute: () => setState(() => _muted = !_muted),
-                          onVolume: (value) => setState(() {
-                            _volume = value;
-                            _muted = false;
-                          }),
+                          onMute: () => unawaited(_toggleMuted()),
+                          onVolume: (value) => unawaited(_setVolume(value)),
                           onCaptions: () =>
                               setState(() => _captions = !_captions),
                           onQuality: (value) =>
-                              setState(() => _quality = value),
+                              unawaited(_changeQuality(value)),
                           onRefresher: () =>
                               _togglePanel(_WatchPanel.refresher),
                           onFullscreen: () =>
@@ -358,13 +726,23 @@ class _WatchScreenState extends State<WatchScreen> {
               _ReactionDrawer(
                 reactions: _reactions,
                 myReaction: _myReaction,
-                onReact: _selectReaction,
+                onReact: (reaction) => unawaited(
+                  _selectReaction(reaction),
+                ),
               ),
             if (_panel == _WatchPanel.community)
               _CommunityDrawer(
                 comments: _comments,
                 controller: _commentController,
-                onPost: _postComment,
+                profile: widget.activeProfile,
+                userId: _communityUserId,
+                loading: _communityLoading,
+                error: _communityError,
+                posting: _commentPending,
+                actionPending: _commentActionPending,
+                onPost: () => unawaited(_postComment()),
+                onEdit: (comment) => unawaited(_editComment(comment)),
+                onDelete: (comment) => unawaited(_deleteComment(comment)),
                 onClose: () => _togglePanel(_WatchPanel.community),
               ),
           ],
@@ -380,6 +758,7 @@ class _TopBar extends StatelessWidget {
     required this.year,
     required this.isSeries,
     required this.episode,
+    required this.quality,
     required this.commentCount,
     required this.reaction,
     required this.onBack,
@@ -392,6 +771,7 @@ class _TopBar extends StatelessWidget {
   final String year;
   final bool isSeries;
   final Episode? episode;
+  final int quality;
   final int commentCount;
   final String? reaction;
   final VoidCallback onBack;
@@ -433,7 +813,8 @@ class _TopBar extends StatelessWidget {
                   if (year.isNotEmpty) year,
                   if (episode != null) 'Episode ${episode!.number}',
                   isSeries ? 'Series' : 'Movie',
-                  'Interactive preview',
+                  'Studio demo clip',
+                  '${quality}p',
                 ].join('   '),
                 style: const TextStyle(fontSize: 12, color: Colors.white70),
               ),
@@ -764,12 +1145,28 @@ class _CommunityDrawer extends StatelessWidget {
   const _CommunityDrawer({
     required this.comments,
     required this.controller,
+    required this.profile,
+    required this.userId,
+    required this.loading,
+    required this.error,
+    required this.posting,
+    required this.actionPending,
     required this.onPost,
+    required this.onEdit,
+    required this.onDelete,
     required this.onClose,
   });
-  final List<String> comments;
+  final List<CommunityComment> comments;
   final TextEditingController controller;
+  final MemberProfile profile;
+  final String? userId;
+  final bool loading;
+  final String? error;
+  final bool posting;
+  final String? actionPending;
   final VoidCallback onPost;
+  final ValueChanged<CommunityComment> onEdit;
+  final ValueChanged<CommunityComment> onDelete;
   final VoidCallback onClose;
 
   @override
@@ -791,7 +1188,15 @@ class _CommunityDrawer extends StatelessWidget {
               child: _CommunityPanel(
                 comments: comments,
                 controller: controller,
+                profile: profile,
+                userId: userId,
+                loading: loading,
+                error: error,
+                posting: posting,
+                actionPending: actionPending,
                 onPost: onPost,
+                onEdit: onEdit,
+                onDelete: onDelete,
                 onClose: onClose,
               ),
             ),
@@ -806,13 +1211,28 @@ class _CommunityPanel extends StatefulWidget {
   const _CommunityPanel({
     required this.comments,
     required this.controller,
+    required this.profile,
+    required this.userId,
+    required this.loading,
+    required this.error,
+    required this.posting,
+    required this.actionPending,
     required this.onPost,
+    required this.onEdit,
+    required this.onDelete,
     required this.onClose,
   });
-  static const stagedCount = 4;
-  final List<String> comments;
+  final List<CommunityComment> comments;
   final TextEditingController controller;
+  final MemberProfile profile;
+  final String? userId;
+  final bool loading;
+  final String? error;
+  final bool posting;
+  final String? actionPending;
   final VoidCallback onPost;
+  final ValueChanged<CommunityComment> onEdit;
+  final ValueChanged<CommunityComment> onDelete;
   final VoidCallback onClose;
 
   @override
@@ -820,48 +1240,9 @@ class _CommunityPanel extends StatefulWidget {
 }
 
 class _CommunityPanelState extends State<_CommunityPanel> {
-  static const _staged = [
-    (
-      'AlexR',
-      'A',
-      'That final scene completely changed how I read the opening.',
-      '2h ago',
-      243,
-      false,
-    ),
-    (
-      'MovieFan97',
-      'M',
-      'The cinematography and sound design are on another level.',
-      '3h ago',
-      187,
-      false,
-    ),
-    (
-      'jen',
-      'J',
-      'Did anyone catch the book shown in the library scene?',
-      '4h ago',
-      98,
-      false,
-    ),
-    (
-      'kdrama_cine',
-      'K',
-      'The reveal after the midpoint makes the whole story click.',
-      '5h ago',
-      156,
-      true,
-    ),
-  ];
-  final Set<String> _liked = {};
-
   @override
   Widget build(BuildContext context) {
-    final mine = widget.comments
-        .map((text) => ('You', 'M', text, 'Now', 0, false))
-        .toList();
-    final visible = [...mine, ..._staged];
+    final visible = widget.comments;
     return Material(
       color: AppColors.inkSoft.withValues(alpha: .97),
       elevation: 22,
@@ -1061,6 +1442,10 @@ class _PlaybackControls extends StatelessWidget {
     required this.muted,
     required this.captions,
     required this.quality,
+    required this.planName,
+    required this.allowedQualities,
+    required this.position,
+    required this.duration,
     required this.showNext,
     required this.onPlayPause,
     required this.onSeek,
@@ -1079,7 +1464,11 @@ class _PlaybackControls extends StatelessWidget {
   final double volume;
   final bool muted;
   final bool captions;
-  final String quality;
+  final int quality;
+  final String planName;
+  final List<int> allowedQualities;
+  final Duration position;
+  final Duration duration;
   final bool showNext;
   final VoidCallback onPlayPause;
   final ValueChanged<double> onSeek;
@@ -1089,7 +1478,7 @@ class _PlaybackControls extends StatelessWidget {
   final VoidCallback onMute;
   final ValueChanged<double> onVolume;
   final VoidCallback onCaptions;
-  final ValueChanged<String> onQuality;
+  final ValueChanged<int> onQuality;
   final VoidCallback onRefresher;
   final VoidCallback onFullscreen;
 
@@ -1112,7 +1501,7 @@ class _PlaybackControls extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Text(
-              '${_timeLabel(progress)} / 2:18:24',
+              '${_timeLabel(position)} / ${_timeLabel(duration)}',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
           ],
@@ -1173,16 +1562,27 @@ class _PlaybackControls extends StatelessWidget {
               color: captions ? AppColors.gold : null,
               icon: const Icon(Icons.closed_caption_rounded),
             ),
-            PopupMenuButton<String>(
+            PopupMenuButton<int>(
               initialValue: quality,
               onSelected: onQuality,
               tooltip: 'Playback settings and resolution',
-              itemBuilder: (_) => ['Auto', '720p', '1080p', '4K']
+              itemBuilder: (_) => playbackQualities
                   .map(
-                    (value) => PopupMenuItem(value: value, child: Text(value)),
+                    (value) => PopupMenuItem(
+                      value: value,
+                      enabled: allowedQualities.contains(value),
+                      child: Text(
+                        allowedQualities.contains(value)
+                            ? '${value}p'
+                            : '${value}p · ${requiredPlanForQuality(value)} plan',
+                      ),
+                    ),
                   )
                   .toList(),
-              icon: const Icon(Icons.settings_outlined),
+              icon: Semantics(
+                label: '$planName plan, ${quality}p studio demo',
+                child: const Icon(Icons.settings_outlined),
+              ),
             ),
             IconButton(
               onPressed: onFullscreen,
@@ -1195,8 +1595,8 @@ class _PlaybackControls extends StatelessWidget {
     ),
   );
 
-  String _timeLabel(double value) {
-    final totalSeconds = (value * (2 * 3600 + 18 * 60 + 24)).round();
+  String _timeLabel(Duration value) {
+    final totalSeconds = value.inSeconds;
     final hours = totalSeconds ~/ 3600;
     final minutes = (totalSeconds % 3600) ~/ 60;
     final seconds = totalSeconds % 60;

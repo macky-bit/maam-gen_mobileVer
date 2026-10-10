@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/member_profile.dart';
+import '../models/subscription_plan.dart';
 import '../services/account_service.dart';
 import '../services/settings_preferences.dart';
 import '../services/subscription_service.dart';
@@ -615,16 +617,160 @@ class _SheetHandle extends StatelessWidget {
   );
 }
 
-class SubscriptionDetailsScreen extends StatelessWidget {
-  const SubscriptionDetailsScreen({super.key, required this.supabase});
+class SubscriptionDetailsScreen extends StatefulWidget {
+  const SubscriptionDetailsScreen({
+    super.key,
+    required this.supabase,
+    required this.onSubscriptionCanceled,
+  });
   final SupabaseClient supabase;
+  final Future<void> Function() onSubscriptionCanceled;
+
+  @override
+  State<SubscriptionDetailsScreen> createState() =>
+      _SubscriptionDetailsScreenState();
+}
+
+class _SubscriptionDetailsScreenState extends State<SubscriptionDetailsScreen>
+    with WidgetsBindingObserver {
+  late Future<SubscriptionStatus> _status;
+  bool _busy = false;
+
+  SubscriptionService get _service => SubscriptionService(widget.supabase);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refresh();
+  }
+
+  void _refresh() {
+    if (!mounted) return;
+    setState(() => _status = _service.fetchStatus());
+  }
+
+  Future<void> _changePlan(SubscriptionStatus status) async {
+    try {
+      final plans = availablePlanChanges(
+        await _service.fetchPlans(),
+        status.subscriptionId,
+      );
+      if (!mounted) return;
+      final selected = await showModalBottomSheet<SubscriptionPlan>(
+        context: context,
+        showDragHandle: true,
+        backgroundColor: AppColors.inkSoft,
+        builder: (context) => SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            children: [
+              Text(
+                'Change plan',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 12),
+              for (final plan in plans)
+                ListTile(
+                  title: Text(plan.name),
+                  subtitle: Text(
+                    '${plan.price}/month · ${plan.maxUsers} profiles',
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.pop(context, plan),
+                ),
+            ],
+          ),
+        ),
+      );
+      if (selected == null || !mounted) return;
+      setState(() => _busy = true);
+      final checkout = await _service.startCheckout(selected);
+      if (checkout.updated) {
+        _refresh();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Plan changed to ${selected.name}.')),
+          );
+        }
+        return;
+      }
+      final uri = checkout.checkoutUrl;
+      if (uri == null ||
+          !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw StateError('Stripe Checkout could not be opened.');
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('The plan could not be changed.'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _cancel() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancel membership?'),
+        content: const Text(
+          'Your access ends immediately. This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep membership'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Cancel membership'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await _service.cancel();
+      if (!mounted) return;
+      Navigator.pop(context);
+      await widget.onSubscriptionCanceled();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('The membership could not be canceled.'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) => _SettingsShell(
     title: 'Subscription',
     subtitle: 'Your current StreamFlix membership',
     child: FutureBuilder<SubscriptionStatus>(
-      future: SubscriptionService(supabase).fetchStatus(),
+      future: _status,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return const Center(child: CircularProgressIndicator());
@@ -696,6 +842,18 @@ class SubscriptionDetailsScreen extends StatelessWidget {
               value: _dateLabel(status.endDate),
               caption: 'Renew or choose another plan after expiration',
             ),
+            if (status.isActive) ...[
+              const SizedBox(height: 22),
+              FilledButton(
+                onPressed: _busy ? null : () => _changePlan(status),
+                child: const Text('Change plan'),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton(
+                onPressed: _busy ? null : _cancel,
+                child: const Text('Cancel membership'),
+              ),
+            ],
           ],
         );
       },
@@ -704,13 +862,8 @@ class SubscriptionDetailsScreen extends StatelessWidget {
 }
 
 class PlaybackPrivacyScreen extends StatefulWidget {
-  const PlaybackPrivacyScreen({
-    super.key,
-    required this.userId,
-    required this.onClearWatchHistory,
-  });
+  const PlaybackPrivacyScreen({super.key, required this.userId});
   final String userId;
-  final VoidCallback onClearWatchHistory;
 
   @override
   State<PlaybackPrivacyScreen> createState() => _PlaybackPrivacyScreenState();
@@ -722,7 +875,6 @@ class _PlaybackPrivacyScreenState extends State<PlaybackPrivacyScreen> {
   bool _autoNext = true;
   bool _autoPreviews = true;
   bool _previewSounds = false;
-  bool _watchHistory = true;
   bool _searchHistory = true;
   bool _personalized = true;
   String _quality = 'Auto';
@@ -741,7 +893,6 @@ class _PlaybackPrivacyScreenState extends State<PlaybackPrivacyScreen> {
       _preferences.getBool('autoNext', true),
       _preferences.getBool('autoPreviews', true),
       _preferences.getBool('previewSounds', false),
-      _preferences.getBool('watchHistory', true),
       _preferences.getBool('searchHistory', true),
       _preferences.getBool('personalized', true),
       _preferences.getString('streamingQuality', 'Auto'),
@@ -753,43 +904,13 @@ class _PlaybackPrivacyScreenState extends State<PlaybackPrivacyScreen> {
       _autoNext = values[0] as bool;
       _autoPreviews = values[1] as bool;
       _previewSounds = values[2] as bool;
-      _watchHistory = values[3] as bool;
-      _searchHistory = values[4] as bool;
-      _personalized = values[5] as bool;
-      _quality = values[6] as String;
-      _dataUsage = values[7] as String;
-      _subtitleSize = values[8] as String;
+      _searchHistory = values[3] as bool;
+      _personalized = values[4] as bool;
+      _quality = values[5] as String;
+      _dataUsage = values[6] as String;
+      _subtitleSize = values[7] as String;
       _loading = false;
     });
-  }
-
-  Future<void> _clearHistory() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Clear watch history?'),
-        content: const Text(
-          'This removes the current device’s Continue Watching history.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Clear'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    widget.onClearWatchHistory();
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Watch history cleared.')));
-    }
   }
 
   @override
@@ -870,15 +991,6 @@ class _PlaybackPrivacyScreenState extends State<PlaybackPrivacyScreen> {
                 title: 'DATA & HISTORY',
                 children: [
                   _SwitchSetting(
-                    title: 'Watch history',
-                    subtitle: 'Track watched titles and progress.',
-                    value: _watchHistory,
-                    onChanged: (value) {
-                      setState(() => _watchHistory = value);
-                      _preferences.setBool('watchHistory', value);
-                    },
-                  ),
-                  _SwitchSetting(
                     title: 'Search history',
                     subtitle: 'Keep recent searches available.',
                     value: _searchHistory,
@@ -895,17 +1007,6 @@ class _PlaybackPrivacyScreenState extends State<PlaybackPrivacyScreen> {
                       setState(() => _personalized = value);
                       _preferences.setBool('personalized', value);
                     },
-                  ),
-                  ListTile(
-                    title: const Text('Clear watch history'),
-                    subtitle: const Text(
-                      'Remove Continue Watching items.',
-                      style: TextStyle(color: AppColors.muted),
-                    ),
-                    trailing: TextButton(
-                      onPressed: _clearHistory,
-                      child: const Text('Clear'),
-                    ),
                   ),
                 ],
               ),
@@ -1226,7 +1327,7 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
     (
       title: 'How to change playback settings',
       body:
-          'Open Playback & privacy to configure autoplay, streaming quality, data use, subtitles, and history.',
+          'Open Playback & privacy for playback preferences, or Watch history to review and remove viewing activity.',
     ),
     (
       title: 'How to protect a profile',

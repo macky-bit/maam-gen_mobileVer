@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/show.dart';
+import '../models/member_profile.dart';
 import '../theme/app_theme.dart';
 import '../widgets/network_art.dart';
 import 'watch_screen.dart';
@@ -8,9 +9,12 @@ import 'watch_screen.dart';
 Future<void> showDetailsSheet(
   BuildContext context, {
   required Show show,
+  required MemberProfile activeProfile,
+  required String planName,
+  required Duration initialPosition,
   required bool isSaved,
   required VoidCallback onToggleSaved,
-  ValueChanged<Show>? onPlayStarted,
+  required VoidCallback onPlaybackEnded,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -22,9 +26,12 @@ Future<void> showDetailsSheet(
     ),
     builder: (context) => _DetailsSheet(
       show: show,
+      activeProfile: activeProfile,
+      planName: planName,
+      initialPosition: initialPosition,
       isSaved: isSaved,
       onToggleSaved: onToggleSaved,
-      onPlayStarted: onPlayStarted,
+      onPlaybackEnded: onPlaybackEnded,
     ),
   );
 }
@@ -32,14 +39,20 @@ Future<void> showDetailsSheet(
 class _DetailsSheet extends StatefulWidget {
   const _DetailsSheet({
     required this.show,
+    required this.activeProfile,
+    required this.planName,
+    required this.initialPosition,
     required this.isSaved,
     required this.onToggleSaved,
-    required this.onPlayStarted,
+    required this.onPlaybackEnded,
   });
   final Show show;
+  final MemberProfile activeProfile;
+  final String planName;
+  final Duration initialPosition;
   final bool isSaved;
   final VoidCallback onToggleSaved;
-  final ValueChanged<Show>? onPlayStarted;
+  final VoidCallback onPlaybackEnded;
 
   @override
   State<_DetailsSheet> createState() => _DetailsSheetState();
@@ -205,11 +218,18 @@ class _DetailsSheetState extends State<_DetailsSheet> {
     );
   }
 
-  void _openPlayer(BuildContext context, Show show) {
-    widget.onPlayStarted?.call(show);
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => WatchScreen(show: show)));
+  Future<void> _openPlayer(BuildContext context, Show show) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => WatchScreen(
+          show: show,
+          activeProfile: widget.activeProfile,
+          planName: widget.planName,
+          initialPosition: widget.initialPosition,
+        ),
+      ),
+    );
+    widget.onPlaybackEnded();
   }
 }
 

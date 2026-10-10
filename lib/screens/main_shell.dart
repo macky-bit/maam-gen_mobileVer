@@ -7,6 +7,7 @@ import '../models/member_profile.dart';
 import '../models/show.dart';
 import '../services/tmdb_service.dart';
 import '../services/library_store.dart';
+import '../services/watch_history_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/brand_logo.dart';
 import '../widgets/show_card.dart';
@@ -20,15 +21,19 @@ class MainShell extends StatefulWidget {
     super.key,
     required this.supabase,
     required this.activeProfile,
+    required this.planName,
     required this.onProfileChanged,
     required this.onManageProfiles,
+    required this.onSubscriptionChanged,
     required this.onSignOut,
   });
 
   final SupabaseClient supabase;
   final MemberProfile activeProfile;
+  final String planName;
   final ValueChanged<MemberProfile> onProfileChanged;
   final VoidCallback onManageProfiles;
+  final Future<void> Function() onSubscriptionChanged;
   final VoidCallback onSignOut;
 
   @override
@@ -38,7 +43,7 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   late TmdbService _service;
   final Set<Show> _saved = {};
-  final List<Show> _continueWatching = [];
+  final List<WatchHistoryEntry> _continueWatching = [];
   int _tab = 0;
   late List<Future<CatalogData>?> _catalogs;
 
@@ -46,6 +51,7 @@ class _MainShellState extends State<MainShell> {
     userId: widget.supabase.auth.currentUser!.id,
     profileId: widget.activeProfile.id,
   );
+  WatchHistoryService get _watchHistory => WatchHistoryService(widget.supabase);
 
   @override
   void initState() {
@@ -53,6 +59,7 @@ class _MainShellState extends State<MainShell> {
     _service = TmdbService(kidsMode: widget.activeProfile.isKids);
     _loadCatalogs();
     unawaited(_loadLibrary());
+    unawaited(_loadWatchHistory());
   }
 
   @override
@@ -67,24 +74,33 @@ class _MainShellState extends State<MainShell> {
         _continueWatching.clear();
       });
       unawaited(_loadLibrary());
+      unawaited(_loadWatchHistory());
     }
   }
 
   Future<void> _loadLibrary() async {
     final profileId = widget.activeProfile.id;
-    final results = await Future.wait([
-      _library.loadMyList(),
-      _library.loadContinueWatching(),
-    ]);
+    final saved = await _library.loadMyList();
     if (!mounted || profileId != widget.activeProfile.id) return;
     setState(() {
       _saved
         ..clear()
-        ..addAll(results[0]);
-      _continueWatching
-        ..clear()
-        ..addAll(results[1]);
+        ..addAll(saved);
     });
+  }
+
+  Future<void> _loadWatchHistory() async {
+    try {
+      final entries = await _watchHistory.load();
+      if (!mounted) return;
+      setState(() {
+        _continueWatching
+          ..clear()
+          ..addAll(entries.where((entry) => entry.show != null).take(10));
+      });
+    } catch (_) {
+      // Keep the last known list when account history is temporarily unavailable.
+    }
   }
 
   void _openSettings() {
@@ -99,10 +115,8 @@ class _MainShellState extends State<MainShell> {
             Navigator.pop(context);
             widget.onManageProfiles();
           },
-          onClearWatchHistory: () {
-            setState(_continueWatching.clear);
-            unawaited(_library.clearContinueWatching());
-          },
+          onSubscriptionChanged: widget.onSubscriptionChanged,
+          onWatchHistoryChanged: () => unawaited(_loadWatchHistory()),
           onSignOut: widget.onSignOut,
         ),
       ),
@@ -139,20 +153,21 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _showDetails(Show show) {
+    final history = _continueWatching
+        .where((entry) => entry.show == show)
+        .firstOrNull;
     showDetailsSheet(
       context,
       show: show,
+      activeProfile: widget.activeProfile,
+      planName: widget.planName,
+      initialPosition: Duration(seconds: history?.lastPlaybackSeconds ?? 0),
       isSaved: _saved.contains(show),
       onToggleSaved: () => setState(() {
         if (!_saved.remove(show)) _saved.add(show);
         unawaited(_library.saveMyList(_saved));
       }),
-      onPlayStarted: (started) => setState(() {
-        _continueWatching.remove(started);
-        _continueWatching.insert(0, started);
-        if (_continueWatching.length > 10) _continueWatching.removeLast();
-        unawaited(_library.saveContinueWatching(_continueWatching));
-      }),
+      onPlaybackEnded: () => unawaited(_loadWatchHistory()),
     );
   }
 
