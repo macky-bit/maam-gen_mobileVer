@@ -107,6 +107,13 @@ class MemberProfileService {
       },
     );
   }
+
+  Future<void> deleteProfile(int profileId) async {
+    await client.rpc(
+      'delete_my_member_profile',
+      params: {'selected_profile_id': profileId},
+    );
+  }
 }
 
 class ProfilePinResult {

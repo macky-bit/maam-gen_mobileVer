@@ -23,6 +23,7 @@ void main() {
       userId: '00000000-0000-0000-0000-000000000001',
       activeProfile: profile,
       onActiveProfileUpdated: (_) {},
+      onActiveProfileDeleted: () {},
       onManageProfiles: () {},
       onSubscriptionChanged: () async {},
       onWatchHistoryChanged: () {},

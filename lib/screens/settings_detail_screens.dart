@@ -442,6 +442,30 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 30),
+            _AccountSection(
+              title: 'BILLING HISTORY',
+              description: 'Your 12 most recent payment transactions.',
+              rows: details.billingHistory.isEmpty
+                  ? const [
+                      _AccountRowData(
+                        icon: Icons.receipt_long_outlined,
+                        label: 'Transactions',
+                        value: 'No billing history is available.',
+                      ),
+                    ]
+                  : [
+                      for (final transaction in details.billingHistory)
+                        _AccountRowData(
+                          icon: Icons.receipt_long_outlined,
+                          label: _dateLabel(transaction.paidAt),
+                          value:
+                              '₱${transaction.amount.toStringAsFixed(2)} · '
+                              '${transaction.status}\n'
+                              '${transaction.paymentMethod ?? 'Payment method unavailable'}',
+                        ),
+                    ],
+            ),
           ],
         );
       },

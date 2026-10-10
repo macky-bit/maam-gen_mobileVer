@@ -57,6 +57,26 @@ void main() {
       'payment_amount': 499,
       'end_date': '2026-10-30T08:00:00+00:00',
       'payment_method': 'prototype',
+      'billing_history': [
+        {
+          'payment_id': 2,
+          'amount': 499,
+          'payment_method': 'Stripe',
+          'reference_number': 'pi_second',
+          'status': 'Paid',
+          'paid_at': '2026-09-30T08:00:00+00:00',
+          'created_at': '2026-09-30T08:00:00+00:00',
+        },
+        {
+          'payment_id': 1,
+          'amount': 499,
+          'payment_method': 'Stripe',
+          'reference_number': 'pi_first',
+          'status': 'Paid',
+          'paid_at': '2026-08-30T08:00:00+00:00',
+          'created_at': '2026-08-30T08:00:00+00:00',
+        },
+      ],
     });
     var updateCount = 0;
 
@@ -80,6 +100,8 @@ void main() {
 
     expect(find.text('PERSONAL INFORMATION'), findsOneWidget);
     expect(find.text('MEMBERSHIP RECORD'), findsOneWidget);
+    expect(find.text('BILLING HISTORY'), findsOneWidget);
+    expect(find.text('08/30/2026'), findsOneWidget);
     expect(find.text('SIGN-IN & SECURITY'), findsNothing);
     expect(find.text('DATABASE RECORD'), findsNothing);
     expect(find.text('Username'), findsNothing);

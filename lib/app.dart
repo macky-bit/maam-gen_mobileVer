@@ -379,6 +379,10 @@ class _StreamFlixAppState extends State<StreamFlixApp>
             planName: _planName,
             onProfileChanged: (profile) =>
                 setState(() => _activeProfile = profile),
+            onProfileDeleted: () => setState(() {
+              _activeProfile = null;
+              _page = _AppPage.profiles;
+            }),
             onManageProfiles: () => setState(() => _page = _AppPage.profiles),
             onSubscriptionChanged: () =>
                 _resolveSubscription(preserveActivePage: true),

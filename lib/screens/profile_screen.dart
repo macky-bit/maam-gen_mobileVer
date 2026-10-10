@@ -15,6 +15,7 @@ class ProfileScreen extends StatefulWidget {
     required this.userId,
     required this.activeProfile,
     required this.onActiveProfileUpdated,
+    required this.onActiveProfileDeleted,
     required this.onManageProfiles,
     required this.onSubscriptionChanged,
     required this.onWatchHistoryChanged,
@@ -25,6 +26,7 @@ class ProfileScreen extends StatefulWidget {
   final String userId;
   final MemberProfile activeProfile;
   final ValueChanged<MemberProfile> onActiveProfileUpdated;
+  final VoidCallback onActiveProfileDeleted;
   final VoidCallback onManageProfiles;
   final Future<void> Function() onSubscriptionChanged;
   final VoidCallback onWatchHistoryChanged;
@@ -71,6 +73,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           setState(() => activeProfile = updated);
           widget.onActiveProfileUpdated(updated);
         },
+        onDeleted: widget.onActiveProfileDeleted,
       ),
     );
   }

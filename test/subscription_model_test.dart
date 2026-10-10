@@ -65,10 +65,34 @@ void main() {
       'payment_amount': 499,
       'end_date': '2026-10-30T08:00:00+00:00',
       'payment_method': 'prototype',
+      'billing_history': [
+        {
+          'payment_id': 22,
+          'amount': '499.00',
+          'payment_method': 'Stripe',
+          'reference_number': 'pi_latest',
+          'status': 'Paid',
+          'paid_at': '2026-09-30T08:00:00+00:00',
+          'created_at': '2026-09-30T08:00:00+00:00',
+        },
+        {
+          'payment_id': 21,
+          'amount': 499,
+          'payment_method': 'Stripe',
+          'reference_number': 'pi_previous',
+          'status': 'Paid',
+          'paid_at': null,
+          'created_at': '2026-08-30T08:00:00+00:00',
+        },
+      ],
     });
 
     expect(settings.firstName, 'Mark');
     expect(settings.birthDate, DateTime(2000, 5, 14));
     expect(settings.paymentAmount, 499);
+    expect(settings.billingHistory, hasLength(2));
+    expect(settings.billingHistory.first.id, '22');
+    expect(settings.billingHistory.first.amount, 499);
+    expect(settings.billingHistory.last.paidAt, DateTime.utc(2026, 8, 30, 8));
   });
 }

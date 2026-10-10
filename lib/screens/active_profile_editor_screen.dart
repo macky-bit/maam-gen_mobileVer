@@ -13,13 +13,17 @@ class ActiveProfileEditorScreen extends StatefulWidget {
     required this.supabase,
     required this.profile,
     required this.onSaved,
+    required this.onDeleted,
     this.loadCatalog,
+    this.deleteProfile,
   });
 
   final SupabaseClient supabase;
   final MemberProfile profile;
   final ValueChanged<MemberProfile> onSaved;
+  final VoidCallback onDeleted;
   final Future<MemberProfileCatalog> Function()? loadCatalog;
+  final Future<void> Function()? deleteProfile;
 
   @override
   State<ActiveProfileEditorScreen> createState() =>
@@ -116,6 +120,97 @@ class _ActiveProfileEditorScreenState extends State<ActiveProfileEditorScreen> {
         });
       }
     }
+  }
+
+  Future<void> _delete() async {
+    var confirmation = '';
+    var deleting = false;
+    String? error;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final canDelete = confirmation.trim() == widget.profile.name;
+          return AlertDialog(
+            title: const Text('Delete profile?'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'This removes ${widget.profile.name} from your profile picker. '
+                    'Its watch history and preferences will no longer be available.',
+                  ),
+                  const SizedBox(height: 18),
+                  TextField(
+                    enabled: !deleting,
+                    autofocus: true,
+                    onChanged: (value) => setDialogState(() {
+                      confirmation = value;
+                      error = null;
+                    }),
+                    decoration: InputDecoration(
+                      labelText: 'Type ${widget.profile.name} to confirm',
+                    ),
+                  ),
+                  if (error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: deleting ? null : () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: !canDelete || deleting
+                    ? null
+                    : () async {
+                        setDialogState(() {
+                          deleting = true;
+                          error = null;
+                        });
+                        try {
+                          await (widget.deleteProfile?.call() ??
+                              _service.deleteProfile(widget.profile.id));
+                          if (!dialogContext.mounted) return;
+                          Navigator.pop(dialogContext);
+                          widget.onDeleted();
+                        } catch (caught) {
+                          if (dialogContext.mounted) {
+                            setDialogState(() {
+                              deleting = false;
+                              error = _profileDeleteMessage(caught);
+                            });
+                          }
+                        }
+                      },
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  foregroundColor: Theme.of(context).colorScheme.onError,
+                ),
+                child: deleting
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Delete profile'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -276,6 +371,21 @@ class _ActiveProfileEditorScreenState extends State<ActiveProfileEditorScreen> {
                           )
                         : const Text('Save profile'),
                   ),
+                  const SizedBox(height: 32),
+                  const _EditorSectionLabel('DANGER ZONE'),
+                  const Divider(height: 1),
+                  const SizedBox(height: 18),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _delete,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.error,
+                      side: BorderSide(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    label: const Text('Delete profile'),
+                  ),
                 ],
               ),
       ),
@@ -295,6 +405,17 @@ class _ActiveProfileEditorScreenState extends State<ActiveProfileEditorScreen> {
       displayOrder: widget.profile.displayOrder,
     );
   }
+}
+
+String _profileDeleteMessage(Object error) {
+  final message = error is PostgrestException
+      ? error.message
+      : error.toString();
+  if (message.contains('At least one profile is required')) {
+    return 'You cannot delete the only profile on your account. '
+        'Create another profile first.';
+  }
+  return 'The profile could not be deleted. Try again.';
 }
 
 class _SelectedAvatar extends StatelessWidget {

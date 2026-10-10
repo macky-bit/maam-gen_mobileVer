@@ -34,7 +34,9 @@ String normalizeComment(String value) {
   String? next,
 ) {
   final updated = Map<String, int>.of(counts);
-  if (current != null) updated[current] = (updated[current]! - 1).clamp(0, 1 << 31);
+  if (current != null) {
+    updated[current] = (updated[current]! - 1).clamp(0, 1 << 31);
+  }
   if (next != null) updated[next] = updated[next]! + 1;
   return (counts: updated, myReaction: next);
 }
@@ -114,24 +116,28 @@ class CommunityService {
     final commentRows = (await commentFuture as List<dynamic>)
         .cast<Map<String, dynamic>>();
     final avatars = await _signedAvatars(commentRows);
-    final comments = commentRows.map((row) {
-      final storedAvatar = row['author_avatar']?.toString().trim() ?? '';
-      return CommunityComment(
-        id: row['comment_id'].toString(),
-        text: row['comment_text'].toString(),
-        commentedAt: DateTime.tryParse(row['commented_at']?.toString() ?? ''),
-        userId: row['user_id'].toString(),
-        memberProfileId: (row['member_profile_id'] as num?)?.toInt(),
-        authorName: row['author_name']?.toString().trim().isNotEmpty == true
-            ? row['author_name'].toString().trim()
-            : 'Community member',
-        authorAvatarUrl: storedAvatar.isEmpty
-            ? null
-            : _isExternal(storedAvatar)
-            ? storedAvatar
-            : avatars[storedAvatar],
-      );
-    }).toList(growable: false);
+    final comments = commentRows
+        .map((row) {
+          final storedAvatar = row['author_avatar']?.toString().trim() ?? '';
+          return CommunityComment(
+            id: row['comment_id'].toString(),
+            text: row['comment_text'].toString(),
+            commentedAt: DateTime.tryParse(
+              row['commented_at']?.toString() ?? '',
+            ),
+            userId: row['user_id'].toString(),
+            memberProfileId: (row['member_profile_id'] as num?)?.toInt(),
+            authorName: row['author_name']?.toString().trim().isNotEmpty == true
+                ? row['author_name'].toString().trim()
+                : 'Community member',
+            authorAvatarUrl: storedAvatar.isEmpty
+                ? null
+                : _isExternal(storedAvatar)
+                ? storedAvatar
+                : avatars[storedAvatar],
+          );
+        })
+        .toList(growable: false);
 
     return CommunitySnapshot(
       counts: counts,
@@ -248,10 +254,9 @@ class CommunityService {
         .toSet();
     final entries = await Future.wait(
       paths.map((path) async {
-        final url = await supabase.storage.from('avatar').createSignedUrl(
-          path,
-          3600,
-        );
+        final url = await supabase.storage
+            .from('avatar')
+            .createSignedUrl(path, 3600);
         return MapEntry(path, url);
       }),
     );

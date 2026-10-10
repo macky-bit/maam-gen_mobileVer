@@ -485,7 +485,10 @@ class _WatchScreenState extends State<WatchScreen> {
       if (mounted) {
         setState(() {
           _comments = _comments
-              .map((item) => item.id == comment.id ? item.copyWith(text: text) : item)
+              .map(
+                (item) =>
+                    item.id == comment.id ? item.copyWith(text: text) : item,
+              )
               .toList(growable: false);
         });
       }
@@ -676,9 +679,8 @@ class _WatchScreenState extends State<WatchScreen> {
                           commentCount: _comments.length,
                           onBack: () => Navigator.pop(context),
                           reaction: _myReaction,
-                          onReaction: () => unawaited(
-                            _selectReaction('\u{1F44D}'),
-                          ),
+                          onReaction: () =>
+                              unawaited(_selectReaction('\u{1F44D}')),
                           onReactionLongPress: () =>
                               _togglePanel(_WatchPanel.reactions),
                           onMusic: _handleSoundtrack,
@@ -726,9 +728,7 @@ class _WatchScreenState extends State<WatchScreen> {
               _ReactionDrawer(
                 reactions: _reactions,
                 myReaction: _myReaction,
-                onReact: (reaction) => unawaited(
-                  _selectReaction(reaction),
-                ),
+                onReact: (reaction) => unawaited(_selectReaction(reaction)),
               ),
             if (_panel == _WatchPanel.community)
               _CommunityDrawer(
@@ -1279,11 +1279,18 @@ class _CommunityPanelState extends State<_CommunityPanel> {
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: visible.isEmpty
-                ? const Center(
-                    child: Text(
-                      'No comments in this view yet.',
-                      style: TextStyle(color: AppColors.muted),
+            child: widget.loading
+                ? const Center(child: CircularProgressIndicator())
+                : visible.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        widget.error ??
+                            'No comments yet. Start the conversation.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppColors.muted),
+                      ),
                     ),
                   )
                 : ListView.separated(
@@ -1293,15 +1300,25 @@ class _CommunityPanelState extends State<_CommunityPanel> {
                         const Divider(color: Colors.white10),
                     itemBuilder: (context, index) {
                       final item = visible[index];
-                      final id = '${item.$1}-${item.$3}';
-                      final liked = _liked.contains(id);
+                      final isOwn = item.userId == widget.userId;
+                      final avatar = item.authorAvatarUrl;
+                      final pending = widget.actionPending == item.id;
                       return Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           CircleAvatar(
                             radius: 20,
                             backgroundColor: AppColors.violetDeep,
-                            child: Text(item.$2),
+                            backgroundImage: avatar == null
+                                ? null
+                                : NetworkImage(avatar),
+                            child: avatar == null
+                                ? Text(
+                                    item.authorName.characters.firstOrNull
+                                            ?.toUpperCase() ??
+                                        '?',
+                                  )
+                                : null,
                           ),
                           const SizedBox(width: 11),
                           Expanded(
@@ -1312,69 +1329,53 @@ class _CommunityPanelState extends State<_CommunityPanel> {
                                   children: [
                                     Expanded(
                                       child: Text(
-                                        item.$1,
+                                        isOwn
+                                            ? '${item.authorName} · You'
+                                            : item.authorName,
                                         style: const TextStyle(
                                           fontWeight: FontWeight.w800,
                                         ),
                                       ),
                                     ),
                                     Text(
-                                      item.$4,
+                                      _commentDate(item.commentedAt),
                                       style: const TextStyle(
                                         color: AppColors.muted,
                                         fontSize: 11,
                                       ),
                                     ),
-                                    if (item.$6)
-                                      const Padding(
-                                        padding: EdgeInsets.only(left: 7),
-                                        child: Icon(
-                                          Icons.visibility_off_outlined,
-                                          color: AppColors.gold,
-                                          size: 15,
-                                        ),
+                                    if (isOwn)
+                                      PopupMenuButton<String>(
+                                        enabled: !pending,
+                                        tooltip: 'Comment actions',
+                                        onSelected: (action) => action == 'edit'
+                                            ? widget.onEdit(item)
+                                            : widget.onDelete(item),
+                                        itemBuilder: (_) => const [
+                                          PopupMenuItem(
+                                            value: 'edit',
+                                            child: Text('Edit'),
+                                          ),
+                                          PopupMenuItem(
+                                            value: 'delete',
+                                            child: Text('Delete'),
+                                          ),
+                                        ],
                                       ),
-                                    const Icon(
-                                      Icons.more_horiz_rounded,
-                                      color: AppColors.muted,
-                                    ),
                                   ],
                                 ),
                                 const SizedBox(height: 3),
                                 Text(
-                                  item.$3,
+                                  item.text,
                                   style: const TextStyle(height: 1.28),
                                 ),
-                                Row(
-                                  children: [
-                                    IconButton(
-                                      onPressed: () => setState(
-                                        () => liked
-                                            ? _liked.remove(id)
-                                            : _liked.add(id),
-                                      ),
-                                      visualDensity: VisualDensity.compact,
-                                      iconSize: 18,
-                                      color: liked
-                                          ? AppColors.gold
-                                          : AppColors.muted,
-                                      icon: Icon(
-                                        liked
-                                            ? Icons.thumb_up_rounded
-                                            : Icons.thumb_up_outlined,
-                                      ),
+                                if (pending)
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 8),
+                                    child: LinearProgressIndicator(
+                                      minHeight: 2,
                                     ),
-                                    Text(
-                                      '${item.$5 + (liked ? 1 : 0)}',
-                                      style: TextStyle(
-                                        color: liked
-                                            ? AppColors.gold
-                                            : AppColors.muted,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                                  ),
                               ],
                             ),
                           ),
@@ -1383,6 +1384,14 @@ class _CommunityPanelState extends State<_CommunityPanel> {
                     },
                   ),
           ),
+          if (widget.error != null && visible.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 8, 18, 0),
+              child: Text(
+                widget.error!,
+                style: const TextStyle(color: AppColors.gold, fontSize: 12),
+              ),
+            ),
           Container(
             padding: const EdgeInsets.fromLTRB(14, 9, 12, 11),
             decoration: BoxDecoration(
@@ -1393,20 +1402,36 @@ class _CommunityPanelState extends State<_CommunityPanel> {
             ),
             child: Row(
               children: [
-                const CircleAvatar(
+                CircleAvatar(
                   radius: 17,
                   backgroundColor: AppColors.violetDeep,
-                  child: Text('M'),
+                  backgroundImage: widget.profile.avatarUrl.isEmpty
+                      ? null
+                      : NetworkImage(widget.profile.avatarUrl),
+                  child: widget.profile.avatarUrl.isEmpty
+                      ? Text(
+                          widget.profile.name.characters.firstOrNull
+                                  ?.toUpperCase() ??
+                              '?',
+                        )
+                      : null,
                 ),
                 const SizedBox(width: 9),
                 Expanded(
                   child: TextField(
                     controller: widget.controller,
+                    enabled: !widget.posting && widget.userId != null,
+                    maxLength: commentMaxLength,
                     maxLines: 1,
                     textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => widget.onPost(),
+                    onSubmitted: (_) {
+                      if (!widget.posting && widget.userId != null) {
+                        widget.onPost();
+                      }
+                    },
                     decoration: const InputDecoration(
                       hintText: 'Add a comment...',
+                      counterText: '',
                       isDense: true,
                       contentPadding: EdgeInsets.symmetric(
                         horizontal: 14,
@@ -1417,13 +1442,20 @@ class _CommunityPanelState extends State<_CommunityPanel> {
                 ),
                 const SizedBox(width: 8),
                 IconButton.filled(
-                  onPressed: widget.onPost,
+                  onPressed: widget.posting || widget.userId == null
+                      ? null
+                      : widget.onPost,
                   tooltip: 'Post comment',
                   style: IconButton.styleFrom(
                     backgroundColor: AppColors.gold,
                     foregroundColor: AppColors.ink,
                   ),
-                  icon: const Icon(Icons.send_rounded),
+                  icon: widget.posting
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send_rounded),
                 ),
               ],
             ),
@@ -1432,6 +1464,30 @@ class _CommunityPanelState extends State<_CommunityPanel> {
       ),
     );
   }
+}
+
+String _communityMessage(Object error, String fallback) {
+  if (error is ArgumentError && error.message != null) {
+    return error.message.toString();
+  }
+  return fallback;
+}
+
+String _commentDate(DateTime? value) {
+  if (value == null) return '';
+  final local = value.toLocal();
+  final difference = DateTime.now().difference(local);
+  if (!difference.isNegative && difference.inMinutes < 1) return 'Now';
+  if (!difference.isNegative && difference.inHours < 1) {
+    return '${difference.inMinutes}m';
+  }
+  if (!difference.isNegative && difference.inDays < 1) {
+    return '${difference.inHours}h';
+  }
+  if (!difference.isNegative && difference.inDays < 7) {
+    return '${difference.inDays}d';
+  }
+  return '${local.month}/${local.day}/${local.year}';
 }
 
 class _PlaybackControls extends StatelessWidget {

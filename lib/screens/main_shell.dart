@@ -23,6 +23,7 @@ class MainShell extends StatefulWidget {
     required this.activeProfile,
     required this.planName,
     required this.onProfileChanged,
+    required this.onProfileDeleted,
     required this.onManageProfiles,
     required this.onSubscriptionChanged,
     required this.onSignOut,
@@ -32,6 +33,7 @@ class MainShell extends StatefulWidget {
   final MemberProfile activeProfile;
   final String planName;
   final ValueChanged<MemberProfile> onProfileChanged;
+  final VoidCallback onProfileDeleted;
   final VoidCallback onManageProfiles;
   final Future<void> Function() onSubscriptionChanged;
   final VoidCallback onSignOut;
@@ -111,6 +113,7 @@ class _MainShellState extends State<MainShell> {
           userId: widget.supabase.auth.currentUser!.id,
           activeProfile: widget.activeProfile,
           onActiveProfileUpdated: widget.onProfileChanged,
+          onActiveProfileDeleted: widget.onProfileDeleted,
           onManageProfiles: () {
             Navigator.pop(context);
             widget.onManageProfiles();

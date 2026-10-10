@@ -40,6 +40,8 @@ void main() {
         AvatarOption(path: 'avatar-2.png', signedUrl: ''),
       ],
     );
+    var deleteAttempts = 0;
+    var deleted = false;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -48,7 +50,14 @@ void main() {
           supabase: client,
           profile: profile,
           onSaved: (_) {},
+          onDeleted: () => deleted = true,
           loadCatalog: () async => catalog,
+          deleteProfile: () async {
+            deleteAttempts++;
+            if (deleteAttempts == 1) {
+              throw StateError('At least one profile is required');
+            }
+          },
         ),
       ),
     );
@@ -73,5 +82,34 @@ void main() {
     );
     expect(find.text('Remove profile PIN'), findsOneWidget);
     expect(find.text('Save profile'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.widgetWithText(OutlinedButton, 'Delete profile'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Delete profile'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Type Mark to confirm'),
+      'Mark',
+    );
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete profile'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        'You cannot delete the only profile on your account. '
+        'Create another profile first.',
+      ),
+      findsOneWidget,
+    );
+    expect(deleted, isFalse);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete profile'));
+    await tester.pumpAndSettle();
+    expect(deleteAttempts, 2);
+    expect(deleted, isTrue);
   });
 }
