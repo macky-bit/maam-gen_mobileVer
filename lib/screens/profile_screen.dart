@@ -197,7 +197,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           icon: Icons.help_outline_rounded,
           title: 'Help center',
           subtitle: 'FAQs and contact options',
-          onTap: () => _open(context, const HelpCenterScreen()),
+          onTap: () => _open(context, HelpCenterScreen(supabase: supabase)),
         ),
         _SettingsTile(
           icon: Icons.info_outline_rounded,

@@ -1,13 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/member_profile.dart';
 import '../models/show.dart';
-import '../services/member_profile_service.dart';
 import '../services/tmdb_service.dart';
+import '../services/library_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/brand_logo.dart';
 import '../widgets/show_card.dart';
@@ -37,141 +36,58 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
-  final _service = TmdbService();
+  late TmdbService _service;
   final Set<Show> _saved = {};
   final List<Show> _continueWatching = [];
   int _tab = 0;
-  late List<Future<CatalogData>> _catalogs;
-  Timer? _profileHoldTimer;
-  bool _profileMenuOpened = false;
-  MemberProfileCatalog? _profileCatalog;
-  Future<MemberProfileCatalog>? _profileCatalogRequest;
+  late List<Future<CatalogData>?> _catalogs;
+
+  LibraryStore get _library => LibraryStore(
+    userId: widget.supabase.auth.currentUser!.id,
+    profileId: widget.activeProfile.id,
+  );
 
   @override
   void initState() {
     super.initState();
+    _service = TmdbService(kidsMode: widget.activeProfile.isKids);
     _loadCatalogs();
-    unawaited(_preloadProfileCatalog());
+    unawaited(_loadLibrary());
   }
 
   @override
-  void dispose() {
-    _profileHoldTimer?.cancel();
-    super.dispose();
+  void didUpdateWidget(covariant MainShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.activeProfile.id != widget.activeProfile.id) {
+      _service = TmdbService(kidsMode: widget.activeProfile.isKids);
+      _loadCatalogs();
+      setState(() {
+        _tab = 0;
+        _saved.clear();
+        _continueWatching.clear();
+      });
+      unawaited(_loadLibrary());
+    }
   }
 
-  void _startProfileHold() {
-    _profileMenuOpened = false;
-    _profileHoldTimer?.cancel();
-    _profileHoldTimer = Timer(const Duration(seconds: 3), () {
-      _profileMenuOpened = true;
-      unawaited(HapticFeedback.mediumImpact());
-      unawaited(_showProfileMenu());
+  Future<void> _loadLibrary() async {
+    final profileId = widget.activeProfile.id;
+    final results = await Future.wait([
+      _library.loadMyList(),
+      _library.loadContinueWatching(),
+    ]);
+    if (!mounted || profileId != widget.activeProfile.id) return;
+    setState(() {
+      _saved
+        ..clear()
+        ..addAll(results[0]);
+      _continueWatching
+        ..clear()
+        ..addAll(results[1]);
     });
   }
 
-  void _cancelProfileHold() {
-    _profileHoldTimer?.cancel();
-  }
-
-  Future<MemberProfileCatalog> _loadProfileCatalog() {
-    final cached = _profileCatalog;
-    if (cached != null) return Future.value(cached);
-    final inFlight = _profileCatalogRequest;
-    if (inFlight != null) return inFlight;
-
-    final request = MemberProfileService(widget.supabase).loadCatalog();
-    _profileCatalogRequest = request;
-    return request.then(
-      (catalog) {
-        _profileCatalog = catalog;
-        _profileCatalogRequest = null;
-        return catalog;
-      },
-      onError: (Object error, StackTrace stackTrace) {
-        _profileCatalogRequest = null;
-        Error.throwWithStackTrace(error, stackTrace);
-      },
-    );
-  }
-
-  Future<void> _preloadProfileCatalog() async {
-    try {
-      await _loadProfileCatalog();
-    } catch (_) {
-      // The long-press action retries and reports an error if loading fails.
-    }
-  }
-
-  Future<void> _showProfileMenu() async {
-    try {
-      final catalog = await _loadProfileCatalog();
-      if (!mounted) return;
-      final overlay =
-          Overlay.of(context).context.findRenderObject() as RenderBox;
-      final selected = await showMenu<MemberProfile>(
-        context: context,
-        position: RelativeRect.fromLTRB(
-          overlay.size.width - 270,
-          kToolbarHeight + MediaQuery.paddingOf(context).top,
-          14,
-          0,
-        ),
-        items: [
-          for (final profile in catalog.profiles)
-            PopupMenuItem<MemberProfile>(
-              value: profile,
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 18,
-                    backgroundColor: AppColors.card,
-                    backgroundImage: profile.avatarUrl.isEmpty
-                        ? null
-                        : NetworkImage(profile.avatarUrl),
-                    child: profile.avatarUrl.isEmpty
-                        ? const Icon(Icons.person_rounded, size: 20)
-                        : null,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      profile.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (profile.id == widget.activeProfile.id)
-                    const Icon(Icons.check_rounded, color: AppColors.gold),
-                ],
-              ),
-            ),
-          const PopupMenuDivider(),
-          PopupMenuItem<MemberProfile>(
-            enabled: false,
-            child: Text(
-              'Hold the profile icon for 3 seconds',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-        ],
-      );
-      if (selected != null && selected.id != widget.activeProfile.id) {
-        widget.onProfileChanged(selected);
-      }
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Profiles could not be loaded.')),
-      );
-    }
-  }
-
   void _openSettings() {
-    if (_profileMenuOpened) {
-      _profileMenuOpened = false;
-      return;
-    }
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ProfileScreen(
@@ -183,7 +99,10 @@ class _MainShellState extends State<MainShell> {
             Navigator.pop(context);
             widget.onManageProfiles();
           },
-          onClearWatchHistory: () => setState(_continueWatching.clear),
+          onClearWatchHistory: () {
+            setState(_continueWatching.clear);
+            unawaited(_library.clearContinueWatching());
+          },
           onSignOut: widget.onSignOut,
         ),
       ),
@@ -191,12 +110,16 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _loadCatalogs() {
-    _catalogs = [
-      _service.home(),
-      _service.movies(),
-      _service.television(),
-      _service.newAndPopular(),
-    ];
+    _catalogs = [_service.home(), null, null, null];
+  }
+
+  Future<CatalogData> _catalogFor(int index) {
+    return _catalogs[index] ??= switch (index) {
+      0 => _service.home(),
+      1 => _service.movies(),
+      2 => _service.television(),
+      _ => _service.newAndPopular(),
+    };
   }
 
   Future<void> _refresh(int index) async {
@@ -209,7 +132,7 @@ class _MainShellState extends State<MainShell> {
       };
     });
     try {
-      await _catalogs[index];
+      await _catalogs[index]!;
     } catch (_) {
       // The catalog widget displays the error and keeps pull-to-refresh active.
     }
@@ -222,10 +145,13 @@ class _MainShellState extends State<MainShell> {
       isSaved: _saved.contains(show),
       onToggleSaved: () => setState(() {
         if (!_saved.remove(show)) _saved.add(show);
+        unawaited(_library.saveMyList(_saved));
       }),
       onPlayStarted: (started) => setState(() {
         _continueWatching.remove(started);
         _continueWatching.insert(0, started);
+        if (_continueWatching.length > 10) _continueWatching.removeLast();
+        unawaited(_library.saveContinueWatching(_continueWatching));
       }),
     );
   }
@@ -311,12 +237,10 @@ class _MainShellState extends State<MainShell> {
           ),
           Padding(
             padding: const EdgeInsets.only(right: 10),
-            child: GestureDetector(
-              onTap: _openSettings,
-              onTapDown: (_) => _startProfileHold(),
-              onTapUp: (_) => _cancelProfileHold(),
-              onTapCancel: _cancelProfileHold,
-              child: CircleAvatar(
+            child: IconButton(
+              onPressed: _openSettings,
+              tooltip: 'Profile and settings',
+              icon: CircleAvatar(
                 radius: 16,
                 backgroundColor: AppColors.card,
                 backgroundImage: widget.activeProfile.avatarUrl.isEmpty
@@ -349,30 +273,39 @@ class _MainShellState extends State<MainShell> {
           index: _tab,
           children: [
             CatalogScreen(
-              catalog: _catalogs[0],
+              catalog: _catalogFor(0),
               onSelect: _showDetails,
               onRefresh: () => _refresh(0),
               continueWatching: _continueWatching,
               showHero: true,
             ),
-            CatalogScreen(
-              catalog: _catalogs[1],
-              onSelect: _showDetails,
-              onRefresh: () => _refresh(1),
-              continueWatching: _continueWatching,
-            ),
-            CatalogScreen(
-              catalog: _catalogs[2],
-              onSelect: _showDetails,
-              onRefresh: () => _refresh(2),
-              continueWatching: _continueWatching,
-            ),
-            CatalogScreen(
-              catalog: _catalogs[3],
-              onSelect: _showDetails,
-              onRefresh: () => _refresh(3),
-              continueWatching: _continueWatching,
-            ),
+            if (_catalogs[1] != null)
+              CatalogScreen(
+                catalog: _catalogs[1]!,
+                onSelect: _showDetails,
+                onRefresh: () => _refresh(1),
+                continueWatching: _continueWatching,
+              )
+            else
+              const SizedBox.shrink(),
+            if (_catalogs[2] != null)
+              CatalogScreen(
+                catalog: _catalogs[2]!,
+                onSelect: _showDetails,
+                onRefresh: () => _refresh(2),
+                continueWatching: _continueWatching,
+              )
+            else
+              const SizedBox.shrink(),
+            if (_catalogs[3] != null)
+              CatalogScreen(
+                catalog: _catalogs[3]!,
+                onSelect: _showDetails,
+                onRefresh: () => _refresh(3),
+                continueWatching: _continueWatching,
+              )
+            else
+              const SizedBox.shrink(),
             _MyList(
               items: _saved.toList(),
               onSelect: _showDetails,
@@ -385,7 +318,10 @@ class _MainShellState extends State<MainShell> {
         backgroundColor: AppColors.inkSoft,
         selectedIndex: _tab,
         height: 70,
-        onDestinationSelected: (value) => setState(() => _tab = value),
+        onDestinationSelected: (value) => setState(() {
+          _tab = value;
+          if (value < 4) _catalogFor(value);
+        }),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),

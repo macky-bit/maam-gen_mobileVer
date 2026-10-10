@@ -53,15 +53,15 @@ class _SearchScreenState extends State<SearchScreen> {
       return;
     }
     _debounce = Timer(const Duration(milliseconds: 350), () {
-      _runSearch(query);
+      _runSearch(query, dismissKeyboard: false);
     });
   }
 
-  void _runSearch([String? submitted]) {
+  void _runSearch(String? submitted, {required bool dismissKeyboard}) {
     _debounce?.cancel();
     final query = (submitted ?? _controller.text).trim();
     if (query.isEmpty) return;
-    FocusScope.of(context).unfocus();
+    if (dismissKeyboard) FocusScope.of(context).unfocus();
     setState(() {
       _activeQuery = query;
       _results = widget.service.search(query);
@@ -77,7 +77,7 @@ class _SearchScreenState extends State<SearchScreen> {
         title: TextField(
           controller: _controller,
           autofocus: true,
-          onSubmitted: _runSearch,
+          onSubmitted: (query) => _runSearch(query, dismissKeyboard: true),
           textInputAction: TextInputAction.search,
           decoration: InputDecoration(
             hintText: 'Movies, shows and more',
@@ -85,7 +85,7 @@ class _SearchScreenState extends State<SearchScreen> {
             suffixIcon: IconButton(
               onPressed: _controller.text.trim().isEmpty
                   ? null
-                  : () => _runSearch(),
+                  : () => _runSearch(null, dismissKeyboard: true),
               icon: const Icon(Icons.arrow_forward_rounded),
               tooltip: 'Search',
             ),
@@ -150,7 +150,8 @@ class _SearchScreenState extends State<SearchScreen> {
                   Text(snapshot.error.toString(), textAlign: TextAlign.center),
                   const SizedBox(height: 18),
                   FilledButton.icon(
-                    onPressed: () => _runSearch(_activeQuery),
+                    onPressed: () =>
+                        _runSearch(_activeQuery, dismissKeyboard: false),
                     icon: const Icon(Icons.refresh_rounded),
                     label: const Text('Try again'),
                   ),

@@ -64,7 +64,10 @@ class _SubscriberProfilesScreenState extends State<SubscriberProfilesScreen> {
         _catalog = catalog;
         _selectedProfileId = catalog.profiles.isEmpty
             ? null
-            : catalog.profiles.first.id;
+            : catalog.profiles
+                  .where((profile) => profile.isEntitled)
+                  .firstOrNull
+                  ?.id;
         _selectedAvatarPath = catalog.avatars.isEmpty
             ? null
             : catalog.avatars.first.path;
@@ -131,6 +134,102 @@ class _SubscriberProfilesScreenState extends State<SubscriberProfilesScreen> {
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
+  }
+
+  Future<void> _continueWith(MemberProfile profile) async {
+    if (!profile.isEntitled) return;
+    if (!profile.hasPin) {
+      widget.onContinue(profile);
+      return;
+    }
+
+    final controller = TextEditingController();
+    var isVerifying = false;
+    String? errorMessage;
+    final verified = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Enter profile PIN'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Enter the four-digit PIN for ${profile.name}.'),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                onChanged: (_) => setDialogState(() => errorMessage = null),
+                onSubmitted: (_) {},
+                decoration: InputDecoration(
+                  labelText: 'Profile PIN',
+                  errorText: errorMessage,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isVerifying
+                  ? null
+                  : () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: isVerifying || controller.text.length != 4
+                  ? null
+                  : () async {
+                      setDialogState(() {
+                        isVerifying = true;
+                        errorMessage = null;
+                      });
+                      try {
+                        final result = await _service.verifyPin(
+                          profileId: profile.id,
+                          pin: controller.text,
+                        );
+                        if (!dialogContext.mounted) return;
+                        if (result.isVerified) {
+                          Navigator.pop(dialogContext, true);
+                          return;
+                        }
+                        final retry = result.retryAfterSeconds;
+                        setDialogState(() {
+                          isVerifying = false;
+                          errorMessage = retry > 0
+                              ? 'Too many attempts. Try again in '
+                                    '${(retry / 60).ceil()} minute(s).'
+                              : 'Incorrect PIN.';
+                          controller.clear();
+                        });
+                      } catch (_) {
+                        if (!dialogContext.mounted) return;
+                        setDialogState(() {
+                          isVerifying = false;
+                          errorMessage = 'The PIN could not be verified.';
+                          controller.clear();
+                        });
+                      }
+                    },
+              child: isVerifying
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Unlock profile'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    if (verified == true && mounted) widget.onContinue(profile);
   }
 
   @override
@@ -200,8 +299,10 @@ class _SubscriberProfilesScreenState extends State<SubscriberProfilesScreen> {
                     _ProfileCard(
                       profile: profile,
                       selected: profile.id == _selectedProfileId,
-                      onTap: () =>
-                          setState(() => _selectedProfileId = profile.id),
+                      onTap: profile.isEntitled
+                          ? () =>
+                                setState(() => _selectedProfileId = profile.id)
+                          : null,
                     ),
                   if (catalog.context.canAddProfile)
                     _AddProfileCard(onTap: _startAdding),
@@ -222,7 +323,7 @@ class _SubscriberProfilesScreenState extends State<SubscriberProfilesScreen> {
             child: FilledButton(
               onPressed: selected == null
                   ? null
-                  : () => widget.onContinue(selected),
+                  : () => _continueWith(selected),
               child: Text(
                 selected == null
                     ? 'Choose a profile'
@@ -378,63 +479,80 @@ class _ProfileCard extends StatelessWidget {
 
   final MemberProfile profile;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(20),
-    child: SizedBox(
-      width: 104,
-      child: Column(
-        children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 170),
-            width: 90,
-            height: 90,
-            padding: const EdgeInsets.all(3),
-            decoration: BoxDecoration(
-              color: AppColors.card,
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                color: selected ? AppColors.gold : Colors.transparent,
-                width: 3,
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    enabled: profile.isEntitled,
+    label: profile.isEntitled
+        ? 'Continue as ${profile.name}${profile.hasPin ? ', PIN required' : ''}'
+        : '${profile.name} is unavailable on the current plan',
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Opacity(
+        opacity: profile.isEntitled ? 1 : .45,
+        child: SizedBox(
+          width: 104,
+          child: Column(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 170),
+                width: 90,
+                height: 90,
+                padding: const EdgeInsets.all(3),
+                decoration: BoxDecoration(
+                  color: AppColors.card,
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: selected ? AppColors.gold : Colors.transparent,
+                    width: 3,
+                  ),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: profile.avatarUrl.isEmpty
+                      ? const Icon(Icons.person_rounded, color: AppColors.muted)
+                      : Image.network(
+                          profile.avatarUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const Icon(
+                            Icons.person_rounded,
+                            color: AppColors.muted,
+                          ),
+                        ),
+                ),
               ),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: profile.avatarUrl.isEmpty
-                  ? const Icon(Icons.person_rounded, color: AppColors.muted)
-                  : Image.network(
-                      profile.avatarUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => const Icon(
-                        Icons.person_rounded,
-                        color: AppColors.muted,
-                      ),
-                    ),
-            ),
-          ),
-          const SizedBox(height: 9),
-          Text(
-            profile.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: selected ? Colors.white : AppColors.muted,
-              fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
-            ),
-          ),
-          if (profile.isKids)
-            const Text(
-              'KIDS',
-              style: TextStyle(
-                color: AppColors.violetLight,
-                fontSize: 9,
-                fontWeight: FontWeight.w900,
+              const SizedBox(height: 9),
+              Text(
+                profile.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? Colors.white : AppColors.muted,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+                ),
               ),
-            ),
-        ],
+              if (profile.isKids)
+                const Text(
+                  'KIDS',
+                  style: TextStyle(
+                    color: AppColors.violetLight,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              if (!profile.isEntitled)
+                const Text(
+                  'UNAVAILABLE',
+                  style: TextStyle(color: AppColors.muted, fontSize: 8),
+                )
+              else if (profile.hasPin)
+                const Icon(Icons.lock_outline_rounded, size: 13),
+            ],
+          ),
+        ),
       ),
     ),
   );

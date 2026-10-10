@@ -8,6 +8,7 @@ class Show {
     required this.year,
     required this.score,
     required this.mediaType,
+    this.isAdult = false,
     this.genreIds = const [],
   });
 
@@ -19,13 +20,22 @@ class Show {
   final String year;
   final int score;
   final String mediaType;
+  final bool isAdult;
   final List<int> genreIds;
 
   String get posterUrl =>
       posterPath.isEmpty ? '' : 'https://image.tmdb.org/t/p/w500$posterPath';
   String get backdropUrl => backdropPath.isEmpty
       ? posterUrl
-      : 'https://image.tmdb.org/t/p/original$backdropPath';
+      : 'https://image.tmdb.org/t/p/w1280$backdropPath';
+
+  bool get isKidsAppropriate {
+    const kidsGenres = {16, 10751, 10762};
+    const matureGenres = {27, 80, 10752};
+    return !isAdult &&
+        genreIds.any(kidsGenres.contains) &&
+        !genreIds.any(matureGenres.contains);
+  }
 
   factory Show.fromJson(Map<String, dynamic> json, {String? type}) {
     final date = (json['release_date'] ?? json['first_air_date'] ?? '')
@@ -44,12 +54,26 @@ class Show {
                   json['media_type'] ??
                   (json['name'] != null ? 'tv' : 'movie'))
               .toString(),
+      isAdult: json['adult'] as bool? ?? false,
       genreIds: (json['genre_ids'] as List<dynamic>? ?? const [])
           .whereType<num>()
           .map((id) => id.toInt())
           .toList(),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'overview': overview,
+    'poster_path': posterPath,
+    'backdrop_path': backdropPath,
+    'release_date': year,
+    'vote_average': score / 10,
+    'media_type': mediaType,
+    'genre_ids': genreIds,
+    'adult': isAdult,
+  };
 
   @override
   bool operator ==(Object other) =>

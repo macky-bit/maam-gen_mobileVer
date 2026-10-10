@@ -146,7 +146,7 @@ class _DetailsSheetState extends State<_DetailsSheet> {
                         child: FilledButton.icon(
                           onPressed: () => _openPlayer(context, show),
                           icon: const Icon(Icons.play_arrow_rounded),
-                          label: const Text('Play'),
+                          label: const Text('Open preview'),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -164,15 +164,6 @@ class _DetailsSheetState extends State<_DetailsSheet> {
                         tooltip: _saved
                             ? 'Remove from My List'
                             : 'Add to My List',
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton.outlined(
-                        onPressed: () {},
-                        style: IconButton.styleFrom(
-                          minimumSize: const Size(52, 52),
-                        ),
-                        icon: const Icon(Icons.ios_share_rounded),
-                        tooltip: 'Share',
                       ),
                     ],
                   ),
@@ -195,7 +186,7 @@ class _DetailsSheetState extends State<_DetailsSheet> {
                   const SizedBox(height: 12),
                   _InfoLine(
                     label: 'Available in',
-                    value: 'Ultra HD  •  Spatial audio',
+                    value: 'Interactive catalog preview',
                   ),
                   _InfoLine(
                     label: 'Content type',
@@ -203,7 +194,7 @@ class _DetailsSheetState extends State<_DetailsSheet> {
                   ),
                   const _InfoLine(
                     label: 'Downloads',
-                    value: 'Available for offline viewing',
+                    value: 'Not available in this build',
                   ),
                 ],
               ),
@@ -232,7 +223,7 @@ class _QualityBadge extends StatelessWidget {
       borderRadius: BorderRadius.circular(4),
     ),
     child: const Text(
-      '4K',
+      'PREVIEW',
       style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
     ),
   );

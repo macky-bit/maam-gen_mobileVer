@@ -1198,7 +1198,9 @@ class _ParentalControlsScreenState extends State<ParentalControlsScreen> {
 }
 
 class HelpCenterScreen extends StatefulWidget {
-  const HelpCenterScreen({super.key});
+  const HelpCenterScreen({super.key, this.supabase});
+
+  final SupabaseClient? supabase;
 
   @override
   State<HelpCenterScreen> createState() => _HelpCenterScreenState();
@@ -1327,60 +1329,83 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
   Future<void> _openContactForm(BuildContext context) async {
     final subject = TextEditingController();
     final description = TextEditingController();
-    final submitted = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: AppColors.inkSoft,
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.fromLTRB(
-          24,
-          4,
-          24,
-          MediaQuery.viewInsetsOf(sheetContext).bottom + 24,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Contact support',
-              style: Theme.of(sheetContext).textTheme.titleLarge,
+    final submitted =
+        await showModalBottomSheet<({String subject, String description})>(
+          context: context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          backgroundColor: AppColors.inkSoft,
+          builder: (sheetContext) => Padding(
+            padding: EdgeInsets.fromLTRB(
+              24,
+              4,
+              24,
+              MediaQuery.viewInsetsOf(sheetContext).bottom + 24,
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: subject,
-              decoration: const InputDecoration(labelText: 'Subject'),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Contact support',
+                  style: Theme.of(sheetContext).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: subject,
+                  maxLength: 50,
+                  decoration: const InputDecoration(labelText: 'Subject'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: description,
+                  maxLines: 4,
+                  maxLength: 200,
+                  decoration: const InputDecoration(
+                    labelText: 'Describe the issue',
+                  ),
+                ),
+                const SizedBox(height: 18),
+                FilledButton(
+                  onPressed: () {
+                    if (subject.text.trim().isEmpty ||
+                        description.text.trim().isEmpty) {
+                      return;
+                    }
+                    Navigator.pop(sheetContext, (
+                      subject: subject.text.trim(),
+                      description: description.text.trim(),
+                    ));
+                  },
+                  child: const Text('Submit request'),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: description,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                labelText: 'Describe the issue',
-              ),
-            ),
-            const SizedBox(height: 18),
-            FilledButton(
-              onPressed: () {
-                if (subject.text.trim().isEmpty ||
-                    description.text.trim().isEmpty) {
-                  return;
-                }
-                Navigator.pop(sheetContext, true);
-              },
-              child: const Text('Submit request'),
-            ),
-          ],
-        ),
-      ),
-    );
+          ),
+        );
     subject.dispose();
     description.dispose();
-    if (submitted == true && mounted) {
-      ScaffoldMessenger.of(this.context).showSnackBar(
-        const SnackBar(content: Text('Support request submitted.')),
-      );
+    if (submitted != null && mounted) {
+      try {
+        final client = widget.supabase;
+        if (client == null) throw StateError('Supabase is not configured.');
+        await AccountService(client).submitSupportRequest(
+          subject: submitted.subject,
+          description: submitted.description,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(this.context).showSnackBar(
+          const SnackBar(content: Text('Support request submitted.')),
+        );
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(this.context).showSnackBar(
+          SnackBar(
+            content: const Text('Support request could not be submitted.'),
+            backgroundColor: Theme.of(this.context).colorScheme.error,
+          ),
+        );
+      }
     }
   }
 }

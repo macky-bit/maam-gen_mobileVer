@@ -11,7 +11,8 @@ class TmdbException implements Exception {
 }
 
 class TmdbService {
-  TmdbService({HttpClient? client}) : _client = client ?? HttpClient();
+  TmdbService({HttpClient? client, this.kidsMode = false})
+    : _client = client ?? HttpClient();
 
   static String _apiKey = const String.fromEnvironment('TMDB_API_KEY');
   static String _readToken = const String.fromEnvironment(
@@ -19,6 +20,7 @@ class TmdbService {
   );
   static const _base = 'https://api.themoviedb.org/3';
   final HttpClient _client;
+  final bool kidsMode;
 
   static void configureFromEnv(String source) {
     final values = <String, String>{};
@@ -54,7 +56,11 @@ class TmdbService {
         'Add TMDB_API_KEY to .env or pass it with --dart-define to load the catalog.',
       );
     }
-    final query = <String, String>{'language': 'en-US', ...params};
+    final query = <String, String>{
+      'language': 'en-US',
+      'include_adult': 'false',
+      ...params,
+    };
     if (_apiKey.isNotEmpty) query['api_key'] = _apiKey;
     final uri = Uri.parse('$_base$path').replace(queryParameters: query);
     final request = await _client.getUrl(uri);
@@ -78,11 +84,14 @@ class TmdbService {
     Map<String, String> params = const {},
   }) async {
     final data = await _get(path, params);
-    return (data['results'] as List<dynamic>? ?? const [])
+    final shows = (data['results'] as List<dynamic>? ?? const [])
         .whereType<Map<String, dynamic>>()
         .map((item) => Show.fromJson(item, type: type))
         .where((show) => show.id != 0 && show.posterPath.isNotEmpty)
         .toList();
+    return kidsMode
+        ? shows.where((show) => show.isKidsAppropriate).toList()
+        : shows;
   }
 
   Future<CatalogData> home() async {

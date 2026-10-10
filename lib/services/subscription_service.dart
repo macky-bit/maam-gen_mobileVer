@@ -58,27 +58,33 @@ class SubscriptionService {
     return SubscriptionStatus.fromJson(rows.first as Map<String, dynamic>);
   }
 
-  Future<SubscriptionStatus> activate(SubscriptionPlan plan) async {
-    final rows =
-        await client.rpc(
-              'activate_my_subscription',
-              params: {'selected_subscription_id': plan.id},
-            )
-            as List;
-    if (rows.isEmpty) {
-      throw StateError('The subscription could not be activated.');
-    }
-    final row = rows.first as Map<String, dynamic>;
-    return SubscriptionStatus(
-      isActive: true,
-      subscriptionId: (row['subscription_id'] as num).toInt(),
-      planName: row['plan_name'] as String?,
-      monthlyPrice: (row['monthly_price'] as num?)?.toDouble(),
-      maxUsers: (row['max_user'] as num?)?.toInt(),
-      paymentDate: row['payment_date'] == null
-          ? null
-          : DateTime.parse(row['payment_date'] as String),
-      endDate: DateTime.parse(row['end_date'] as String),
+  Future<SubscriptionCheckoutResult> startCheckout(
+    SubscriptionPlan plan,
+  ) async {
+    final response = await client.functions.invoke(
+      'create-checkout-session',
+      body: {'planId': plan.id},
     );
+    final data = response.data;
+    if (data is! Map) {
+      throw StateError('Stripe Checkout returned an invalid response.');
+    }
+    if (data['updated'] == true) {
+      return const SubscriptionCheckoutResult(updated: true);
+    }
+    final checkoutUrl = Uri.tryParse(data['url']?.toString() ?? '');
+    if (checkoutUrl == null ||
+        checkoutUrl.scheme != 'https' ||
+        checkoutUrl.host != 'checkout.stripe.com') {
+      throw StateError('Stripe Checkout returned an invalid URL.');
+    }
+    return SubscriptionCheckoutResult(checkoutUrl: checkoutUrl);
   }
+}
+
+class SubscriptionCheckoutResult {
+  const SubscriptionCheckoutResult({this.updated = false, this.checkoutUrl});
+
+  final bool updated;
+  final Uri? checkoutUrl;
 }

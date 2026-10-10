@@ -2,12 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'models/subscription_plan.dart';
 import 'models/member_profile.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_shell.dart';
 import 'screens/google_onboarding_screen.dart';
+import 'screens/reset_password_screen.dart';
 import 'screens/subscription_screen.dart';
 import 'screens/subscriber_profiles_screen.dart';
 import 'services/subscription_service.dart';
@@ -44,7 +46,14 @@ class _StreamFlixAppState extends State<StreamFlixApp>
     }
     _authSubscription = auth?.onAuthStateChange.listen((state) {
       if (!mounted) return;
-      if (state.session != null && _page == _AppPage.login) {
+      if (state.event == AuthChangeEvent.passwordRecovery) {
+        _expiryTimer?.cancel();
+        setState(() {
+          _page = _AppPage.resetPassword;
+          _subscriptionError = null;
+          _activeProfile = null;
+        });
+      } else if (state.session != null && _page == _AppPage.login) {
         setState(() => _page = _AppPage.loading);
         unawaited(_routeAuthenticatedSession());
       } else if (state.session == null && _page != _AppPage.login) {
@@ -71,6 +80,7 @@ class _StreamFlixAppState extends State<StreamFlixApp>
     if (state == AppLifecycleState.resumed &&
         widget.supabase?.auth.currentSession != null &&
         _page != _AppPage.login &&
+        _page != _AppPage.resetPassword &&
         _page != _AppPage.loading) {
       unawaited(_routeAuthenticatedSession(preserveActivePage: true));
     }
@@ -95,6 +105,32 @@ class _StreamFlixAppState extends State<StreamFlixApp>
     );
   }
 
+  Future<void> _resetPassword(String email) async {
+    final client = widget.supabase;
+    if (client == null) throw StateError('Supabase is not configured.');
+    await client.auth.resetPasswordForEmail(
+      email.trim(),
+      redirectTo: SupabaseService.oauthRedirectUri,
+    );
+  }
+
+  Future<void> _completePasswordRecovery(String password) async {
+    final client = widget.supabase;
+    if (client?.auth.currentSession == null) {
+      throw const AuthException(
+        'This password reset link has expired. Request a new one.',
+      );
+    }
+    await client!.auth.updateUser(UserAttributes(password: password));
+    await client.auth.signOut();
+    if (!mounted) return;
+    setState(() {
+      _page = _AppPage.login;
+      _subscriptionError = null;
+      _activeProfile = null;
+    });
+  }
+
   Future<bool> _registerWithEmail(
     String email,
     String password,
@@ -116,20 +152,24 @@ class _StreamFlixAppState extends State<StreamFlixApp>
     bool preserveActivePage = false,
   }) async {
     final client = widget.supabase;
-    if (client == null || client.auth.currentSession == null) return;
+    if (client == null ||
+        client.auth.currentSession == null ||
+        _page == _AppPage.resetPassword) {
+      return;
+    }
     try {
       final rows = await client.rpc('get_my_google_onboarding_state') as List;
       final requiresOnboarding =
           rows.isNotEmpty &&
           (rows.first as Map<String, dynamic>)['requires_onboarding'] == true;
-      if (!mounted) return;
+      if (!mounted || _page == _AppPage.resetPassword) return;
       if (requiresOnboarding) {
         setState(() => _page = _AppPage.googleOnboarding);
         return;
       }
       await _resolveSubscription(preserveActivePage: preserveActivePage);
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || _page == _AppPage.resetPassword) return;
       setState(() {
         _subscriptionError = 'We could not check your account. Try again.';
         _page = _AppPage.loading;
@@ -182,7 +222,11 @@ class _StreamFlixAppState extends State<StreamFlixApp>
 
   Future<void> _resolveSubscription({bool preserveActivePage = false}) async {
     final client = widget.supabase;
-    if (client == null || client.auth.currentSession == null) return;
+    if (client == null ||
+        client.auth.currentSession == null ||
+        _page == _AppPage.resetPassword) {
+      return;
+    }
     if (_isResolvingSubscription) return;
     _isResolvingSubscription = true;
     final previousPage = _page;
@@ -206,7 +250,7 @@ class _StreamFlixAppState extends State<StreamFlixApp>
       if (status.isActive && activePlan == null) {
         throw StateError('The active subscription plan could not be found.');
       }
-      if (!mounted) return;
+      if (!mounted || _page == _AppPage.resetPassword) return;
       setState(() {
         _plans = plans;
         _page = activePlan == null
@@ -219,7 +263,7 @@ class _StreamFlixAppState extends State<StreamFlixApp>
       });
       _scheduleExpiry(status.isActive ? status.endDate : null);
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || _page == _AppPage.resetPassword) return;
       setState(() {
         _subscriptionError = 'We could not check your subscription. Try again.';
         _page = _AppPage.loading;
@@ -229,18 +273,29 @@ class _StreamFlixAppState extends State<StreamFlixApp>
     }
   }
 
-  Future<void> _activateSubscription(SubscriptionPlan plan) async {
+  Future<bool> _startSubscriptionCheckout(SubscriptionPlan plan) async {
     final client = widget.supabase;
     if (client == null || client.auth.currentSession == null) {
       throw StateError('Sign in before subscribing.');
     }
-    final status = await SubscriptionService(client).activate(plan);
+    final service = SubscriptionService(client);
+    final checkout = await service.startCheckout(plan);
+    if (!checkout.updated) {
+      final uri = checkout.checkoutUrl;
+      if (uri == null ||
+          !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw StateError('Stripe Checkout could not be opened.');
+      }
+      return false;
+    }
+    final status = await service.fetchStatus();
     if (!status.isActive) throw StateError('Subscription is not active.');
-    if (!mounted) return;
+    if (!mounted) return true;
     setState(() {
       _page = _AppPage.profiles;
     });
     _scheduleExpiry(status.endDate);
+    return true;
   }
 
   void _scheduleExpiry(DateTime? endDate) {
@@ -272,8 +327,13 @@ class _StreamFlixAppState extends State<StreamFlixApp>
           _AppPage.login => LoginScreen(
             key: const ValueKey('login'),
             onEmailSignIn: _signInWithEmail,
+            onPasswordReset: _resetPassword,
             onRegister: _registerWithEmail,
             onGoogleSignIn: _signInWithGoogle,
+          ),
+          _AppPage.resetPassword => ResetPasswordScreen(
+            key: const ValueKey('reset-password-page'),
+            onSubmit: _completePasswordRecovery,
           ),
           _AppPage.googleOnboarding => GoogleOnboardingScreen(
             key: const ValueKey('google-onboarding'),
@@ -285,7 +345,7 @@ class _StreamFlixAppState extends State<StreamFlixApp>
             key: const ValueKey('subscription'),
             plans: _plans,
             onBack: _signOut,
-            onContinue: _activateSubscription,
+            onContinue: _startSubscriptionCheckout,
           ),
           _AppPage.profiles => SubscriberProfilesScreen(
             key: const ValueKey('profiles'),
@@ -354,4 +414,12 @@ class _SubscriptionLoadingView extends StatelessWidget {
   }
 }
 
-enum _AppPage { loading, login, googleOnboarding, subscription, profiles, main }
+enum _AppPage {
+  loading,
+  login,
+  resetPassword,
+  googleOnboarding,
+  subscription,
+  profiles,
+  main,
+}

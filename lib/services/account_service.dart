@@ -108,4 +108,25 @@ class AccountService {
       },
     );
   }
+
+  Future<void> submitSupportRequest({
+    required String subject,
+    required String description,
+  }) async {
+    final user = client.auth.currentUser;
+    if (user == null) throw StateError('Sign in to contact support.');
+    final account = await client
+        .from('user')
+        .select('user_id')
+        .eq('auth_user_id', user.id)
+        .single();
+    await client.from('platform_feedback').insert({
+      'user_id': account['user_id'],
+      'feedback_type': 'Support Request',
+      'subject': subject.trim(),
+      'description': '[Mobile app]\n${description.trim()}',
+      'screenshot': null,
+      'status': 'Open',
+    });
+  }
 }

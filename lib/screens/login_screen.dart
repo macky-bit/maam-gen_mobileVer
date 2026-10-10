@@ -10,6 +10,7 @@ class LoginScreen extends StatefulWidget {
     required this.onEmailSignIn,
     required this.onRegister,
     required this.onGoogleSignIn,
+    this.onPasswordReset,
   });
 
   final Future<void> Function(String email, String password) onEmailSignIn;
@@ -20,6 +21,7 @@ class LoginScreen extends StatefulWidget {
   )
   onRegister;
   final Future<void> Function() onGoogleSignIn;
+  final Future<void> Function(String email)? onPasswordReset;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -268,7 +270,7 @@ class _LoginScreenState extends State<LoginScreen> {
     Align(
       alignment: Alignment.centerRight,
       child: TextButton(
-        onPressed: () {},
+        onPressed: widget.onPasswordReset == null ? null : _resetPassword,
         child: const Text('Forgot password?'),
       ),
     ),
@@ -346,6 +348,31 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       ),
   ];
+
+  Future<void> _resetPassword() async {
+    final email = _email.text.trim();
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      setState(() => _errors = {..._errors, 'email': 'Enter a valid email.'});
+      return;
+    }
+    setState(() {
+      _errors = {..._errors}..remove('email');
+      _authMessage = null;
+    });
+    try {
+      await widget.onPasswordReset!(email);
+      if (mounted) {
+        setState(
+          () => _authMessage =
+              'Password reset instructions were sent if the account exists.',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _authMessage = 'Password reset could not be sent.');
+      }
+    }
+  }
 
   List<Widget> _registrationFields() => [
     Row(
@@ -492,6 +519,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ? Icons.visibility_outlined
                 : Icons.visibility_off_outlined,
           ),
+          tooltip: _obscure ? 'Show password' : 'Hide password',
         ),
       ),
     );

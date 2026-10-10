@@ -69,6 +69,26 @@ class MemberProfileService {
     );
   }
 
+  Future<ProfilePinResult> verifyPin({
+    required int profileId,
+    required String pin,
+  }) async {
+    final rows =
+        await client.rpc(
+              'verify_my_member_profile_pin',
+              params: {'selected_profile_id': profileId, 'selected_pin': pin},
+            )
+            as List;
+    if (rows.isEmpty) {
+      throw StateError('The profile PIN could not be verified.');
+    }
+    final row = rows.first as Map<String, dynamic>;
+    return ProfilePinResult(
+      isVerified: row['is_verified'] as bool? ?? false,
+      retryAfterSeconds: (row['retry_after_seconds'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   Future<void> updateProfile({
     required int profileId,
     required String name,
@@ -87,4 +107,14 @@ class MemberProfileService {
       },
     );
   }
+}
+
+class ProfilePinResult {
+  const ProfilePinResult({
+    required this.isVerified,
+    required this.retryAfterSeconds,
+  });
+
+  final bool isVerified;
+  final int retryAfterSeconds;
 }

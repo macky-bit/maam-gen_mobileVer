@@ -14,7 +14,7 @@ class SubscriptionScreen extends StatefulWidget {
 
   final List<SubscriptionPlan> plans;
   final VoidCallback onBack;
-  final Future<void> Function(SubscriptionPlan) onContinue;
+  final Future<bool> Function(SubscriptionPlan) onContinue;
 
   @override
   State<SubscriptionScreen> createState() => _SubscriptionScreenState();
@@ -24,6 +24,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   late SubscriptionPlan _selected;
   bool _isActivating = false;
   String? _errorMessage;
+  String? _statusMessage;
 
   @override
   void initState() {
@@ -35,13 +36,20 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     setState(() {
       _isActivating = true;
       _errorMessage = null;
+      _statusMessage = null;
     });
     try {
-      await widget.onContinue(_selected);
+      final activated = await widget.onContinue(_selected);
+      if (!mounted || activated) return;
+      setState(
+        () => _statusMessage =
+            'Complete payment in Stripe Checkout, then return to StreamFlix.',
+      );
     } catch (error) {
       if (!mounted) return;
       setState(
-        () => _errorMessage = 'Subscription could not be activated. Try again.',
+        () =>
+            _errorMessage = 'Stripe Checkout could not be started. Try again.',
       );
     } finally {
       if (mounted) setState(() => _isActivating = false);
@@ -104,6 +112,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                       _errorMessage!,
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.redAccent),
+                    ),
+                  ],
+                  if (_statusMessage != null) ...[
+                    const SizedBox(height: 18),
+                    Text(
+                      _statusMessage!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: AppColors.violetLight),
                     ),
                   ],
                 ],
