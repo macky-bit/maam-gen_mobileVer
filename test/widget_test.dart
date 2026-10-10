@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_flix/app.dart';
 
@@ -8,9 +9,11 @@ void main() {
     expect(find.text('STREAMFLIX'), findsOneWidget);
     expect(find.text('Welcome back.'), findsOneWidget);
     expect(find.text('Sign in'), findsOneWidget);
-    expect(find.text('Explore as guest'), findsNothing);
+    expect(find.text('Continue with Google'), findsOneWidget);
+    expect(find.byKey(const ValueKey('google-sign-in')), findsOneWidget);
     expect(find.text('Register'), findsOneWidget);
 
+    await tester.ensureVisible(find.text('Register'));
     await tester.tap(find.text('Register'));
     await tester.pumpAndSettle();
 

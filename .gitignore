@@ -22,6 +22,7 @@ build/
 # =======================
 **/android/local.properties
 **/android/.gradle/
+**/android/.kotlin/
 **/android/captures/
 **/android/gradlew
 **/android/gradlew.bat
@@ -83,7 +84,7 @@ lib/generated_plugin_registrant.dart
 # IDEs & Editors
 # =======================
 # VS Code
-.vscode/
+.vscode/*
 !.vscode/settings.json
 !.vscode/launch.json
 !.vscode/extensions.json
@@ -117,4 +118,5 @@ $RECYCLE.BIN/
 # =======================
 .env
 .env.*
+!.env.example
 *.pem

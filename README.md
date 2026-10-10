@@ -17,15 +17,18 @@ routes, screens, imports, or assets in this Flutter application.
 
 ## Run
 
-Pass either a TMDB API key or read-access token at build time:
+Create a local `.env` file (see `.env.example`). It is bundled as an app asset,
+so regular run and build commands both load it automatically:
+
+```powershell
+flutter run
+flutter build apk
+```
+
+You can alternatively pass either credential directly at build time:
 
 ```powershell
 flutter run --dart-define=TMDB_API_KEY=your_key
-```
-
-or:
-
-```powershell
 flutter run --dart-define=TMDB_READ_ACCESS_TOKEN=your_token
 ```
 

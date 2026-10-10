@@ -2,20 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/show.dart';
 import '../services/tmdb_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/network_art.dart';
 
-enum _WatchPanel {
-  player,
-  episodes,
-  soundtrack,
-  refresher,
-  reactions,
-  community,
-}
+enum _WatchPanel { player, episodes, refresher, reactions, community }
 
 class WatchScreen extends StatefulWidget {
   const WatchScreen({super.key, required this.show});
@@ -52,9 +47,10 @@ class _WatchScreenState extends State<WatchScreen> {
   double _progress = .08;
   double _volume = .8;
   int _episodeIndex = 0;
-  int _trackIndex = 0;
   String _quality = '1080p';
   String? _myReaction;
+  late Future<_SoundtrackEntry> _soundtrack;
+  bool _soundtrackPrimed = false;
 
   bool get _isSeries => widget.show.mediaType == 'tv';
   Episode? get _episode => _episodes.isEmpty
@@ -79,6 +75,86 @@ class _WatchScreenState extends State<WatchScreen> {
             return items;
           })
         : Future.value(const []);
+    _soundtrack = _loadSoundtrack();
+  }
+
+  Future<_SoundtrackEntry> _loadSoundtrack() async {
+    try {
+      final client = Supabase.instance.client;
+      final content = await client
+          .from('content')
+          .select('content_id')
+          .eq('tmdb_id', widget.show.id)
+          .maybeSingle();
+      if (content == null) throw StateError('Content not found');
+      final row = await client
+          .from('soundtrack')
+          .select()
+          .eq('content_id', content['content_id'])
+          .limit(1)
+          .maybeSingle();
+      if (row == null) throw StateError('Soundtrack not found');
+      String firstValue(List<String> keys) {
+        for (final key in keys) {
+          final value = row[key]?.toString().trim() ?? '';
+          if (value.isNotEmpty) return value;
+        }
+        return '';
+      }
+
+      return _SoundtrackEntry(
+        title: firstValue(['song_title', 'track_title', 'title', 'name']),
+        url: firstValue(['external_url', 'youtube_url', 'spotify_url', 'url']),
+      );
+    } catch (_) {
+      return _SoundtrackEntry(title: '${widget.show.title} Main Theme');
+    }
+  }
+
+  Future<void> _handleSoundtrack() async {
+    final track = await _soundtrack;
+    if (!mounted) return;
+    if (!_soundtrackPrimed) {
+      setState(() => _soundtrackPrimed = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          content: Text('${track.title}\nTap the music icon again to open it.'),
+        ),
+      );
+      return;
+    }
+    setState(() => _soundtrackPrimed = false);
+    final uri = Uri.tryParse(track.url ?? '');
+    if (uri == null ||
+        !uri.hasScheme ||
+        !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No soundtrack link is configured for this title.'),
+          ),
+        );
+      }
+    }
+  }
+
+  void _selectReaction(String reaction) {
+    setState(() {
+      if (_myReaction != null) {
+        _reactions[_myReaction!] = (_reactions[_myReaction!]! - 1).clamp(
+          0,
+          999,
+        );
+      }
+      if (_myReaction == reaction) {
+        _myReaction = null;
+      } else {
+        _myReaction = reaction;
+        _reactions[reaction] = _reactions[reaction]! + 1;
+      }
+      _panel = _WatchPanel.player;
+    });
   }
 
   @override
@@ -156,11 +232,18 @@ class _WatchScreenState extends State<WatchScreen> {
                 ),
               ),
             ),
-            if (_panel != _WatchPanel.player)
+            if (_panel != _WatchPanel.player &&
+                _panel != _WatchPanel.community &&
+                _panel != _WatchPanel.reactions)
               Center(
                 child: Container(
-                  width: MediaQuery.sizeOf(context).width * .62,
-                  constraints: const BoxConstraints(maxHeight: 300),
+                  width: _panel == _WatchPanel.reactions
+                      ? MediaQuery.sizeOf(context).width * .58
+                      : MediaQuery.sizeOf(context).width * .62,
+                  constraints: BoxConstraints(
+                    maxWidth: _panel == _WatchPanel.reactions ? 560 : 720,
+                    maxHeight: _panel == _WatchPanel.reactions ? 150 : 300,
+                  ),
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     color: const Color(0xE6120E19),
@@ -191,17 +274,6 @@ class _WatchScreenState extends State<WatchScreen> {
                         onPlay: () =>
                             setState(() => _panel = _WatchPanel.player),
                       ),
-                      _WatchPanel.soundtrack => _SoundtrackPanel(
-                        key: const ValueKey('soundtrack'),
-                        title: widget.show.title,
-                        trackIndex: _trackIndex,
-                        onPrevious: () => setState(
-                          () => _trackIndex = (_trackIndex - 1).clamp(0, 2),
-                        ),
-                        onNext: () => setState(
-                          () => _trackIndex = (_trackIndex + 1).clamp(0, 2),
-                        ),
-                      ),
                       _WatchPanel.refresher => _RefresherPanel(
                         key: const ValueKey('refresher'),
                         isSeries: _isSeries,
@@ -210,31 +282,8 @@ class _WatchScreenState extends State<WatchScreen> {
                           () => _showRefresherDetails = !_showRefresherDetails,
                         ),
                       ),
-                      _WatchPanel.reactions => _ReactionsPanel(
-                        key: const ValueKey('reactions'),
-                        reactions: _reactions,
-                        myReaction: _myReaction,
-                        onReact: (reaction) {
-                          setState(() {
-                            if (_myReaction != null) {
-                              _reactions[_myReaction!] =
-                                  (_reactions[_myReaction!]! - 1).clamp(0, 999);
-                            }
-                            if (_myReaction == reaction) {
-                              _myReaction = null;
-                            } else {
-                              _myReaction = reaction;
-                              _reactions[reaction] = _reactions[reaction]! + 1;
-                            }
-                          });
-                        },
-                      ),
-                      _WatchPanel.community => _CommunityPanel(
-                        key: const ValueKey('community'),
-                        comments: _comments,
-                        controller: _commentController,
-                        onPost: _postComment,
-                      ),
+                      _WatchPanel.reactions => const SizedBox.shrink(),
+                      _WatchPanel.community => const SizedBox.shrink(),
                     },
                   ),
                 ),
@@ -254,14 +303,16 @@ class _WatchScreenState extends State<WatchScreen> {
                           year: widget.show.year,
                           isSeries: _isSeries,
                           episode: episode,
-                          commentCount: _comments.length,
+                          commentCount:
+                              _comments.length + _CommunityPanel.stagedCount,
                           onBack: () => Navigator.pop(context),
-                          onReaction: () => _togglePanel(_WatchPanel.reactions),
-                          onMusic: () => _togglePanel(_WatchPanel.soundtrack),
+                          reaction: _myReaction,
+                          onReaction: () => _selectReaction('\u{1F44D}'),
+                          onReactionLongPress: () =>
+                              _togglePanel(_WatchPanel.reactions),
+                          onMusic: _handleSoundtrack,
                           onCommunity: () =>
                               _togglePanel(_WatchPanel.community),
-                          onPanelSelected: _togglePanel,
-                          isPlayingPanel: _panel == _WatchPanel.player,
                         ),
                       ),
                       Align(
@@ -303,6 +354,19 @@ class _WatchScreenState extends State<WatchScreen> {
                 ),
               ),
             ),
+            if (_panel == _WatchPanel.reactions)
+              _ReactionDrawer(
+                reactions: _reactions,
+                myReaction: _myReaction,
+                onReact: _selectReaction,
+              ),
+            if (_panel == _WatchPanel.community)
+              _CommunityDrawer(
+                comments: _comments,
+                controller: _commentController,
+                onPost: _postComment,
+                onClose: () => _togglePanel(_WatchPanel.community),
+              ),
           ],
         ),
       ),
@@ -317,30 +381,30 @@ class _TopBar extends StatelessWidget {
     required this.isSeries,
     required this.episode,
     required this.commentCount,
+    required this.reaction,
     required this.onBack,
     required this.onReaction,
+    required this.onReactionLongPress,
     required this.onMusic,
     required this.onCommunity,
-    required this.onPanelSelected,
-    required this.isPlayingPanel,
   });
   final String title;
   final String year;
   final bool isSeries;
   final Episode? episode;
   final int commentCount;
+  final String? reaction;
   final VoidCallback onBack;
   final VoidCallback onReaction;
+  final VoidCallback onReactionLongPress;
   final VoidCallback onMusic;
   final VoidCallback onCommunity;
-  final ValueChanged<_WatchPanel> onPanelSelected;
-  final bool isPlayingPanel;
 
   @override
   Widget build(BuildContext context) => Container(
     height: 76,
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-    color: const Color(0xB8000000),
+    color: Colors.black.withValues(alpha: .30),
     child: Row(
       children: [
         IconButton(
@@ -377,11 +441,6 @@ class _TopBar extends StatelessWidget {
           ),
         ),
         IconButton(
-          onPressed: onReaction,
-          tooltip: 'Reactions',
-          icon: const Icon(Icons.sentiment_satisfied_alt_rounded),
-        ),
-        IconButton(
           onPressed: onMusic,
           tooltip: 'Soundtrack',
           icon: const Icon(Icons.music_note_rounded),
@@ -395,24 +454,19 @@ class _TopBar extends StatelessWidget {
             icon: const Icon(Icons.chat_outlined),
           ),
         ),
-        PopupMenuButton<_WatchPanel>(
-          tooltip: 'More options',
-          onSelected: onPanelSelected,
-          itemBuilder: (_) => [
-            PopupMenuItem(
-              value: _WatchPanel.player,
-              child: Text(isPlayingPanel ? 'Watching now' : 'Return to movie'),
+        Tooltip(
+          message: 'Tap to like, hold for reactions',
+          child: InkResponse(
+            onTap: onReaction,
+            onLongPress: onReactionLongPress,
+            radius: 24,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: reaction == null
+                  ? const Icon(Icons.thumb_up_outlined)
+                  : Text(reaction!, style: const TextStyle(fontSize: 22)),
             ),
-            if (isSeries)
-              const PopupMenuItem(
-                value: _WatchPanel.episodes,
-                child: Text('Episodes'),
-              ),
-            const PopupMenuItem(
-              value: _WatchPanel.refresher,
-              child: Text('Story recap'),
-            ),
-          ],
+          ),
         ),
       ],
     ),
@@ -562,67 +616,10 @@ class _EpisodesPanel extends StatelessWidget {
   );
 }
 
-class _SoundtrackPanel extends StatelessWidget {
-  const _SoundtrackPanel({
-    super.key,
-    required this.title,
-    required this.trackIndex,
-    required this.onPrevious,
-    required this.onNext,
-  });
+class _SoundtrackEntry {
+  const _SoundtrackEntry({required this.title, this.url});
   final String title;
-  final int trackIndex;
-  final VoidCallback onPrevious;
-  final VoidCallback onNext;
-  static const tracks = ['Main Theme', 'Featured Track', 'Closing Theme'];
-
-  @override
-  Widget build(BuildContext context) => Column(
-    mainAxisAlignment: MainAxisAlignment.center,
-    children: [
-      Container(
-        width: 94,
-        height: 94,
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [AppColors.violet, AppColors.orange],
-          ),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: const Icon(Icons.album_rounded, size: 52),
-      ),
-      const SizedBox(height: 14),
-      const Text(
-        'SOUNDTRACK',
-        style: TextStyle(
-          color: AppColors.gold,
-          fontSize: 11,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 1.3,
-        ),
-      ),
-      const SizedBox(height: 5),
-      Text(tracks[trackIndex], style: Theme.of(context).textTheme.titleLarge),
-      Text(title, style: const TextStyle(color: AppColors.muted)),
-      const SizedBox(height: 16),
-      Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          IconButton.outlined(
-            onPressed: onPrevious,
-            icon: const Icon(Icons.skip_previous_rounded),
-          ),
-          const SizedBox(width: 18),
-          const Icon(Icons.play_circle_fill_rounded, size: 52),
-          const SizedBox(width: 18),
-          IconButton.outlined(
-            onPressed: onNext,
-            icon: const Icon(Icons.skip_next_rounded),
-          ),
-        ],
-      ),
-    ],
-  );
+  final String? url;
 }
 
 class _RefresherPanel extends StatelessWidget {
@@ -669,9 +666,8 @@ class _RefresherPanel extends StatelessWidget {
   );
 }
 
-class _ReactionsPanel extends StatelessWidget {
-  const _ReactionsPanel({
-    super.key,
+class _ReactionDrawer extends StatelessWidget {
+  const _ReactionDrawer({
     required this.reactions,
     required this.myReaction,
     required this.onReact,
@@ -682,121 +678,383 @@ class _ReactionsPanel extends StatelessWidget {
   final ValueChanged<String> onReact;
 
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    mainAxisAlignment: MainAxisAlignment.center,
-    children: reactions.entries.map((entry) {
-      final selected = myReaction == entry.key;
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Material(
-              color: selected ? AppColors.violet : Colors.white12,
-              shape: const CircleBorder(),
-              child: InkWell(
-                onTap: () => onReact(entry.key),
-                customBorder: const CircleBorder(),
-                child: SizedBox(
-                  width: 58,
-                  height: 58,
-                  child: Center(
-                    child: Text(
-                      entry.key,
-                      style: const TextStyle(fontSize: 32),
+  Widget build(BuildContext context) => SafeArea(
+    child: Align(
+      alignment: Alignment.topRight,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 72, right: 12),
+        child: _ReactionsPanel(
+          reactions: reactions,
+          myReaction: myReaction,
+          onReact: onReact,
+        ),
+      ),
+    ),
+  );
+}
+
+class _ReactionsPanel extends StatelessWidget {
+  const _ReactionsPanel({
+    required this.reactions,
+    required this.myReaction,
+    required this.onReact,
+  });
+
+  final Map<String, int> reactions;
+  final String? myReaction;
+  final ValueChanged<String> onReact;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 62,
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+    decoration: BoxDecoration(
+      color: AppColors.inkSoft,
+      borderRadius: BorderRadius.circular(28),
+      border: Border.all(color: AppColors.violet.withValues(alpha: .45)),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: reactions.entries.map((entry) {
+        final selected = myReaction == entry.key;
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Material(
+                color: selected
+                    ? AppColors.violet.withValues(alpha: .38)
+                    : Colors.white10,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  onTap: () => onReact(entry.key),
+                  customBorder: const CircleBorder(),
+                  child: SizedBox(
+                    width: 38,
+                    height: 38,
+                    child: Center(
+                      child: Text(
+                        entry.key,
+                        style: const TextStyle(fontSize: 23),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              '${entry.value}',
-              style: TextStyle(
-                color: selected ? AppColors.violetLight : AppColors.muted,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
+              const SizedBox(height: 1),
+              Text(
+                '${entry.value}',
+                style: TextStyle(
+                  color: selected ? AppColors.violetLight : AppColors.muted,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
-          ],
-        ),
-      );
-    }).toList(),
+            ],
+          ),
+        );
+      }).toList(),
+    ),
   );
 }
 
-class _CommunityPanel extends StatelessWidget {
-  const _CommunityPanel({
-    super.key,
+class _CommunityDrawer extends StatelessWidget {
+  const _CommunityDrawer({
     required this.comments,
     required this.controller,
     required this.onPost,
+    required this.onClose,
   });
   final List<String> comments;
   final TextEditingController controller;
   final VoidCallback onPost;
+  final VoidCallback onClose;
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisAlignment: MainAxisAlignment.center,
-    children: [
-      Text(
-        'Comments',
-        style: Theme.of(
-          context,
-        ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
-      ),
-      const SizedBox(height: 10),
-      Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              maxLines: 1,
-              decoration: const InputDecoration(
-                hintText: 'Write a comment…',
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 11,
-                ),
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = constraints.maxWidth < 720
+          ? constraints.maxWidth * .68
+          : (constraints.maxWidth * .44).clamp(380.0, 540.0);
+      return SafeArea(
+        minimum: const EdgeInsets.all(10),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {},
+            child: SizedBox(
+              width: width,
+              height: double.infinity,
+              child: _CommunityPanel(
+                comments: comments,
+                controller: controller,
+                onPost: onPost,
+                onClose: onClose,
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          IconButton.filled(
-            onPressed: onPost,
-            icon: const Icon(Icons.send_rounded),
+        ),
+      );
+    },
+  );
+}
+
+class _CommunityPanel extends StatefulWidget {
+  const _CommunityPanel({
+    required this.comments,
+    required this.controller,
+    required this.onPost,
+    required this.onClose,
+  });
+  static const stagedCount = 4;
+  final List<String> comments;
+  final TextEditingController controller;
+  final VoidCallback onPost;
+  final VoidCallback onClose;
+
+  @override
+  State<_CommunityPanel> createState() => _CommunityPanelState();
+}
+
+class _CommunityPanelState extends State<_CommunityPanel> {
+  static const _staged = [
+    (
+      'AlexR',
+      'A',
+      'That final scene completely changed how I read the opening.',
+      '2h ago',
+      243,
+      false,
+    ),
+    (
+      'MovieFan97',
+      'M',
+      'The cinematography and sound design are on another level.',
+      '3h ago',
+      187,
+      false,
+    ),
+    (
+      'jen',
+      'J',
+      'Did anyone catch the book shown in the library scene?',
+      '4h ago',
+      98,
+      false,
+    ),
+    (
+      'kdrama_cine',
+      'K',
+      'The reveal after the midpoint makes the whole story click.',
+      '5h ago',
+      156,
+      true,
+    ),
+  ];
+  final Set<String> _liked = {};
+
+  @override
+  Widget build(BuildContext context) {
+    final mine = widget.comments
+        .map((text) => ('You', 'M', text, 'Now', 0, false))
+        .toList();
+    final visible = [...mine, ..._staged];
+    return Material(
+      color: AppColors.inkSoft.withValues(alpha: .97),
+      elevation: 22,
+      shadowColor: Colors.black87,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(color: AppColors.violet.withValues(alpha: .5)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 8, 2),
+            child: Row(
+              children: [
+                Text(
+                  'Comments',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  onPressed: widget.onClose,
+                  tooltip: 'Close comments',
+                  icon: const Icon(Icons.close_rounded, size: 28),
+                ),
+              ],
+            ),
+          ),
+          Divider(
+            height: 1,
+            color: AppColors.violetLight.withValues(alpha: .18),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: visible.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No comments in this view yet.',
+                      style: TextStyle(color: AppColors.muted),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    itemCount: visible.length,
+                    separatorBuilder: (_, _) =>
+                        const Divider(color: Colors.white10),
+                    itemBuilder: (context, index) {
+                      final item = visible[index];
+                      final id = '${item.$1}-${item.$3}';
+                      final liked = _liked.contains(id);
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          CircleAvatar(
+                            radius: 20,
+                            backgroundColor: AppColors.violetDeep,
+                            child: Text(item.$2),
+                          ),
+                          const SizedBox(width: 11),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        item.$1,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      item.$4,
+                                      style: const TextStyle(
+                                        color: AppColors.muted,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                    if (item.$6)
+                                      const Padding(
+                                        padding: EdgeInsets.only(left: 7),
+                                        child: Icon(
+                                          Icons.visibility_off_outlined,
+                                          color: AppColors.gold,
+                                          size: 15,
+                                        ),
+                                      ),
+                                    const Icon(
+                                      Icons.more_horiz_rounded,
+                                      color: AppColors.muted,
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  item.$3,
+                                  style: const TextStyle(height: 1.28),
+                                ),
+                                Row(
+                                  children: [
+                                    IconButton(
+                                      onPressed: () => setState(
+                                        () => liked
+                                            ? _liked.remove(id)
+                                            : _liked.add(id),
+                                      ),
+                                      visualDensity: VisualDensity.compact,
+                                      iconSize: 18,
+                                      color: liked
+                                          ? AppColors.gold
+                                          : AppColors.muted,
+                                      icon: Icon(
+                                        liked
+                                            ? Icons.thumb_up_rounded
+                                            : Icons.thumb_up_outlined,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${item.$5 + (liked ? 1 : 0)}',
+                                      style: TextStyle(
+                                        color: liked
+                                            ? AppColors.gold
+                                            : AppColors.muted,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: () {},
+                                      child: const Text('Reply'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+          ),
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 9, 12, 11),
+            decoration: BoxDecoration(
+              color: AppColors.ink,
+              border: Border(
+                top: BorderSide(color: AppColors.violet.withValues(alpha: .24)),
+              ),
+            ),
+            child: Row(
+              children: [
+                const CircleAvatar(
+                  radius: 17,
+                  backgroundColor: AppColors.violetDeep,
+                  child: Text('M'),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: TextField(
+                    controller: widget.controller,
+                    maxLines: 1,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => widget.onPost(),
+                    decoration: const InputDecoration(
+                      hintText: 'Add a comment...',
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 11,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: widget.onPost,
+                  tooltip: 'Post comment',
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppColors.gold,
+                    foregroundColor: AppColors.ink,
+                  ),
+                  icon: const Icon(Icons.send_rounded),
+                ),
+              ],
+            ),
           ),
         ],
       ),
-      const SizedBox(height: 10),
-      if (comments.isEmpty)
-        const Text(
-          'No comments yet. Be the first to share your thoughts.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: AppColors.muted),
-        )
-      else
-        ...comments
-            .take(2)
-            .map(
-              (comment) => ListTile(
-                dense: true,
-                leading: const CircleAvatar(radius: 14, child: Text('M')),
-                title: const Text(
-                  'You',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  comment,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ),
-    ],
-  );
+    );
+  }
 }
 
 class _PlaybackControls extends StatelessWidget {

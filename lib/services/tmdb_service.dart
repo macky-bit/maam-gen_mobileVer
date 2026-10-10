@@ -13,12 +13,37 @@ class TmdbException implements Exception {
 class TmdbService {
   TmdbService({HttpClient? client}) : _client = client ?? HttpClient();
 
-  static const apiKey = String.fromEnvironment('TMDB_API_KEY');
-  static const readToken = String.fromEnvironment('TMDB_READ_ACCESS_TOKEN');
+  static String _apiKey = const String.fromEnvironment('TMDB_API_KEY');
+  static String _readToken = const String.fromEnvironment(
+    'TMDB_READ_ACCESS_TOKEN',
+  );
   static const _base = 'https://api.themoviedb.org/3';
   final HttpClient _client;
 
-  bool get isConfigured => apiKey.isNotEmpty || readToken.isNotEmpty;
+  static void configureFromEnv(String source) {
+    final values = <String, String>{};
+    for (final sourceLine in const LineSplitter().convert(source)) {
+      var line = sourceLine.trim();
+      if (line.isEmpty || line.startsWith('#')) continue;
+      if (line.startsWith('export ')) line = line.substring(7).trimLeft();
+      final separator = line.indexOf('=');
+      if (separator <= 0) continue;
+      final name = line.substring(0, separator).trim();
+      var value = line.substring(separator + 1).trim();
+      if (value.length >= 2 &&
+          ((value.startsWith('"') && value.endsWith('"')) ||
+              (value.startsWith("'") && value.endsWith("'")))) {
+        value = value.substring(1, value.length - 1);
+      }
+      values[name] = value;
+    }
+    if (_apiKey.isEmpty) _apiKey = values['TMDB_API_KEY'] ?? '';
+    if (_readToken.isEmpty) {
+      _readToken = values['TMDB_READ_ACCESS_TOKEN'] ?? '';
+    }
+  }
+
+  bool get isConfigured => _apiKey.isNotEmpty || _readToken.isNotEmpty;
 
   Future<Map<String, dynamic>> _get(
     String path, [
@@ -26,15 +51,18 @@ class TmdbService {
   ]) async {
     if (!isConfigured) {
       throw const TmdbException(
-        'Add your TMDB key with --dart-define=TMDB_API_KEY=your_key to load the catalog.',
+        'Add TMDB_API_KEY to .env or pass it with --dart-define to load the catalog.',
       );
     }
     final query = <String, String>{'language': 'en-US', ...params};
-    if (apiKey.isNotEmpty) query['api_key'] = apiKey;
+    if (_apiKey.isNotEmpty) query['api_key'] = _apiKey;
     final uri = Uri.parse('$_base$path').replace(queryParameters: query);
     final request = await _client.getUrl(uri);
-    if (readToken.isNotEmpty) {
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $readToken');
+    if (_readToken.isNotEmpty) {
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Bearer $_readToken',
+      );
     }
     final response = await request.close();
     final body = await utf8.decoder.bind(response).join();

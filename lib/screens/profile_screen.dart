@@ -1,11 +1,77 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/member_profile.dart';
 import '../theme/app_theme.dart';
 import '../widgets/brand_logo.dart';
+import 'active_profile_editor_screen.dart';
+import 'settings_detail_screens.dart';
 
-class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key, required this.onSignOut});
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({
+    super.key,
+    required this.supabase,
+    required this.userId,
+    required this.activeProfile,
+    required this.onActiveProfileUpdated,
+    required this.onManageProfiles,
+    required this.onClearWatchHistory,
+    required this.onSignOut,
+  });
+
+  final SupabaseClient supabase;
+  final String userId;
+  final MemberProfile activeProfile;
+  final ValueChanged<MemberProfile> onActiveProfileUpdated;
+  final VoidCallback onManageProfiles;
+  final VoidCallback onClearWatchHistory;
   final VoidCallback onSignOut;
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  late MemberProfile activeProfile;
+  SupabaseClient get supabase => widget.supabase;
+  String get userId => widget.userId;
+  VoidCallback get onManageProfiles => widget.onManageProfiles;
+  VoidCallback get onClearWatchHistory => widget.onClearWatchHistory;
+  VoidCallback get onSignOut => widget.onSignOut;
+
+  @override
+  void initState() {
+    super.initState();
+    activeProfile = widget.activeProfile;
+  }
+
+  @override
+  void didUpdateWidget(covariant ProfileScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.activeProfile.id != widget.activeProfile.id ||
+        oldWidget.activeProfile.name != widget.activeProfile.name ||
+        oldWidget.activeProfile.avatarPath != widget.activeProfile.avatarPath) {
+      activeProfile = widget.activeProfile;
+    }
+  }
+
+  void _open(BuildContext context, Widget screen) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+  }
+
+  void _editActiveProfile() {
+    _open(
+      context,
+      ActiveProfileEditorScreen(
+        supabase: supabase,
+        profile: activeProfile,
+        onSaved: (updated) {
+          setState(() => activeProfile = updated);
+          widget.onActiveProfileUpdated(updated);
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -21,41 +87,50 @@ class ProfileScreen extends StatelessWidget {
             ),
             borderRadius: BorderRadius.circular(20),
           ),
-          child: const Row(
+          child: Row(
             children: [
               CircleAvatar(
                 radius: 31,
-                backgroundColor: AppColors.gold,
-                child: Text(
-                  'M',
-                  style: TextStyle(
-                    color: AppColors.ink,
-                    fontSize: 27,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
+                backgroundColor: AppColors.card,
+                backgroundImage: activeProfile.avatarUrl.isEmpty
+                    ? null
+                    : NetworkImage(activeProfile.avatarUrl),
+                child: activeProfile.avatarUrl.isEmpty
+                    ? Text(
+                        activeProfile.name.characters.first.toUpperCase(),
+                        style: const TextStyle(
+                          color: AppColors.gold,
+                          fontSize: 27,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      )
+                    : null,
               ),
-              SizedBox(width: 16),
+              const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'My Profile',
-                      style: TextStyle(
+                      activeProfile.name,
+                      style: const TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    SizedBox(height: 3),
+                    const SizedBox(height: 3),
                     Text(
-                      'Premium member',
-                      style: TextStyle(color: AppColors.muted),
+                      activeProfile.isKids ? 'Kids profile' : 'Active profile',
+                      style: const TextStyle(color: AppColors.muted),
                     ),
                   ],
                 ),
               ),
-              Icon(Icons.edit_outlined),
+              IconButton(
+                onPressed: _editActiveProfile,
+                tooltip: 'Edit active profile',
+                icon: const Icon(Icons.edit_outlined),
+              ),
             ],
           ),
         ),
@@ -65,39 +140,56 @@ class ProfileScreen extends StatelessWidget {
           icon: Icons.person_outline_rounded,
           title: 'Account details',
           subtitle: 'Email, password and profile',
+          onTap: () => _open(context, AccountDetailsScreen(supabase: supabase)),
+        ),
+        _SettingsTile(
+          icon: Icons.switch_account_outlined,
+          title: 'Profiles',
+          subtitle: 'Switch, add or manage viewing profiles',
+          onTap: onManageProfiles,
         ),
         _SettingsTile(
           icon: Icons.workspace_premium_outlined,
           title: 'Subscription',
-          subtitle: 'Premium • Renews monthly',
+          subtitle: 'Membership and billing details',
           trailing: 'Manage',
-        ),
-        _SettingsTile(
-          icon: Icons.devices_rounded,
-          title: 'Devices',
-          subtitle: 'Manage signed-in devices',
+          onTap: () =>
+              _open(context, SubscriptionDetailsScreen(supabase: supabase)),
         ),
         const SizedBox(height: 22),
         const _SectionLabel('PREFERENCES'),
         _SettingsTile(
-          icon: Icons.notifications_none_rounded,
-          title: 'Notifications',
-          subtitle: 'New releases and recommendations',
+          icon: Icons.play_circle_outline_rounded,
+          title: 'Playback & privacy',
+          subtitle: 'Autoplay, quality, history and subtitles',
+          onTap: () => _open(
+            context,
+            PlaybackPrivacyScreen(
+              userId: userId,
+              onClearWatchHistory: onClearWatchHistory,
+            ),
+          ),
         ),
         _SettingsTile(
           icon: Icons.download_outlined,
           title: 'Downloads',
           subtitle: 'Wi-Fi only • Standard quality',
+          onTap: () => _open(context, DownloadSettingsScreen(userId: userId)),
         ),
         _SettingsTile(
           icon: Icons.language_rounded,
           title: 'Language',
           subtitle: 'English',
+          onTap: () => _open(context, LanguageSettingsScreen(userId: userId)),
         ),
         _SettingsTile(
           icon: Icons.child_care_outlined,
           title: 'Parental controls',
           subtitle: 'Viewing restrictions and PIN',
+          onTap: () => _open(
+            context,
+            ParentalControlsScreen(supabase: supabase, profile: activeProfile),
+          ),
         ),
         const SizedBox(height: 22),
         const _SectionLabel('SUPPORT'),
@@ -105,11 +197,13 @@ class ProfileScreen extends StatelessWidget {
           icon: Icons.help_outline_rounded,
           title: 'Help center',
           subtitle: 'FAQs and contact options',
+          onTap: () => _open(context, const HelpCenterScreen()),
         ),
         _SettingsTile(
           icon: Icons.info_outline_rounded,
           title: 'About StreamFlix',
           subtitle: 'Version 1.0.0',
+          onTap: () => _open(context, const AboutStreamFlixScreen()),
         ),
         const SizedBox(height: 24),
         OutlinedButton.icon(
@@ -154,11 +248,13 @@ class _SettingsTile extends StatelessWidget {
     required this.title,
     required this.subtitle,
     this.trailing,
+    this.onTap,
   });
   final IconData icon;
   final String title;
   final String subtitle;
   final String? trailing;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) => ListTile(
@@ -187,6 +283,6 @@ class _SettingsTile extends StatelessWidget {
               fontSize: 12,
             ),
           ),
-    onTap: () {},
+    onTap: onTap ?? () {},
   );
 }

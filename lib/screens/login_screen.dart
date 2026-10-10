@@ -1,12 +1,25 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../theme/app_theme.dart';
 import '../widgets/brand_logo.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, required this.onAuthenticate});
+  const LoginScreen({
+    super.key,
+    required this.onEmailSignIn,
+    required this.onRegister,
+    required this.onGoogleSignIn,
+  });
 
-  final VoidCallback onAuthenticate;
+  final Future<void> Function(String email, String password) onEmailSignIn;
+  final Future<bool> Function(
+    String email,
+    String password,
+    Map<String, dynamic> metadata,
+  )
+  onRegister;
+  final Future<void> Function() onGoogleSignIn;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -23,6 +36,10 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscure = true;
   bool _registering = false;
   bool _agreed = false;
+  bool _isGoogleSigningIn = false;
+  bool _isSubmitting = false;
+  String? _googleError;
+  String? _authMessage;
   Map<String, String> _errors = const {};
 
   @override
@@ -40,20 +57,18 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _registering = !_registering;
       _errors = const {};
+      _authMessage = null;
     });
   }
 
-  void _submit() {
-    if (!_registering) {
-      widget.onAuthenticate();
-      return;
-    }
-
+  Future<void> _submit() async {
     final errors = <String, String>{};
-    if (_firstName.text.trim().isEmpty) errors['firstName'] = 'Required.';
-    if (_lastName.text.trim().isEmpty) errors['lastName'] = 'Required.';
-    if (_dateOfBirth.text.isEmpty) errors['dob'] = 'Required.';
-    if (_username.text.trim().isEmpty) errors['username'] = 'Required.';
+    if (_registering) {
+      if (_firstName.text.trim().isEmpty) errors['firstName'] = 'Required.';
+      if (_lastName.text.trim().isEmpty) errors['lastName'] = 'Required.';
+      if (_dateOfBirth.text.isEmpty) errors['dob'] = 'Required.';
+      if (_username.text.trim().isEmpty) errors['username'] = 'Required.';
+    }
     if (_email.text.trim().isEmpty) {
       errors['email'] = 'Required.';
     } else if (!RegExp(r'^\S+@\S+\.\S+$').hasMatch(_email.text.trim())) {
@@ -64,10 +79,63 @@ class _LoginScreenState extends State<LoginScreen> {
     } else if (_password.text.length < 8) {
       errors['password'] = 'At least 8 characters.';
     }
-    if (!_agreed) errors['terms'] = 'You must agree to continue.';
+    if (_registering && !_agreed) {
+      errors['terms'] = 'You must agree to continue.';
+    }
 
-    setState(() => _errors = errors);
-    if (errors.isEmpty) widget.onAuthenticate();
+    setState(() {
+      _errors = errors;
+      _authMessage = null;
+    });
+    if (errors.isNotEmpty || _isSubmitting) return;
+
+    setState(() => _isSubmitting = true);
+    try {
+      if (_registering) {
+        final signedIn = await widget.onRegister(_email.text, _password.text, {
+          'first_name': _firstName.text.trim(),
+          'last_name': _lastName.text.trim(),
+          'username': _username.text.trim(),
+          'date_of_birth': _dateOfBirth.text,
+        });
+        if (mounted && !signedIn) {
+          setState(() {
+            _authMessage =
+                'Account created. Check your email to confirm your account, then sign in.';
+          });
+        }
+      } else {
+        await widget.onEmailSignIn(_email.text, _password.text);
+      }
+    } on AuthException catch (error) {
+      if (mounted) setState(() => _authMessage = error.message);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _authMessage = 'Authentication failed. Try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  Future<void> _signInWithGoogle() async {
+    if (_isGoogleSigningIn) return;
+    setState(() {
+      _isGoogleSigningIn = true;
+      _googleError = null;
+    });
+
+    try {
+      await widget.onGoogleSignIn();
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _googleError = 'Google sign-in could not be started. Try again.';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _isGoogleSigningIn = false);
+    }
   }
 
   Future<void> _pickDate() async {
@@ -104,7 +172,9 @@ class _LoginScreenState extends State<LoginScreen> {
               padding: const EdgeInsets.fromLTRB(24, 28, 24, 32),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  minHeight: constraints.maxHeight - 60,
+                  minHeight: constraints.maxHeight > 60
+                      ? constraints.maxHeight - 60
+                      : 0,
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -183,16 +253,18 @@ class _LoginScreenState extends State<LoginScreen> {
 
   List<Widget> _loginFields() => [
     TextField(
+      key: const ValueKey('email-input'),
       controller: _email,
       keyboardType: TextInputType.emailAddress,
       autofillHints: const [AutofillHints.email],
-      decoration: const InputDecoration(
+      decoration: InputDecoration(
         labelText: 'Email address',
-        prefixIcon: Icon(Icons.mail_outline_rounded),
+        prefixIcon: const Icon(Icons.mail_outline_rounded),
+        errorText: _errors['email'],
       ),
     ),
     const SizedBox(height: 14),
-    _passwordField(label: 'Password'),
+    _passwordField(label: 'Password', error: _errors['password']),
     Align(
       alignment: Alignment.centerRight,
       child: TextButton(
@@ -200,7 +272,79 @@ class _LoginScreenState extends State<LoginScreen> {
         child: const Text('Forgot password?'),
       ),
     ),
-    FilledButton(onPressed: _submit, child: const Text('Sign in')),
+    if (_authMessage != null) ...[
+      Text(
+        _authMessage!,
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Theme.of(context).colorScheme.error),
+      ),
+      const SizedBox(height: 12),
+    ],
+    FilledButton(
+      key: const ValueKey('email-sign-in'),
+      onPressed: _isSubmitting ? null : _submit,
+      child: _isSubmitting
+          ? const SizedBox.square(
+              dimension: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Text('Sign in'),
+    ),
+    const SizedBox(height: 20),
+    const Row(
+      children: [
+        Expanded(child: Divider(color: Color(0x447C3AED))),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: 14),
+          child: Text(
+            'OR',
+            style: TextStyle(
+              color: AppColors.muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.4,
+            ),
+          ),
+        ),
+        Expanded(child: Divider(color: Color(0x447C3AED))),
+      ],
+    ),
+    const SizedBox(height: 20),
+    OutlinedButton.icon(
+      key: const ValueKey('google-sign-in'),
+      onPressed: _isGoogleSigningIn ? null : _signInWithGoogle,
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(54),
+        foregroundColor: Colors.white,
+        backgroundColor: AppColors.violetDeep,
+        side: const BorderSide(color: AppColors.violetLight),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      icon: _isGoogleSigningIn
+          ? const SizedBox.square(
+              dimension: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.gold,
+              ),
+            )
+          : const _GoogleMark(),
+      label: Text(
+        _isGoogleSigningIn ? 'Opening Google…' : 'Continue with Google',
+      ),
+    ),
+    if (_googleError != null)
+      Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Text(
+          _googleError!,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.error,
+            fontSize: 12,
+          ),
+        ),
+      ),
   ];
 
   List<Widget> _registrationFields() => [
@@ -309,12 +453,30 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
       ),
-    const SizedBox(height: 6),
-    FilledButton(onPressed: _submit, child: const Text('Create Account')),
+    if (_authMessage != null) ...[
+      const SizedBox(height: 6),
+      Text(
+        _authMessage!,
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Theme.of(context).colorScheme.error),
+      ),
+      const SizedBox(height: 10),
+    ] else
+      const SizedBox(height: 6),
+    FilledButton(
+      onPressed: _isSubmitting ? null : _submit,
+      child: _isSubmitting
+          ? const SizedBox.square(
+              dimension: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Text('Create Account'),
+    ),
   ];
 
   Widget _passwordField({required String label, String? hint, String? error}) {
     return TextField(
+      key: const ValueKey('password-input'),
       controller: _password,
       obscureText: _obscure,
       autofillHints: const [AutofillHints.password],
@@ -334,4 +496,27 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
+}
+
+class _GoogleMark extends StatelessWidget {
+  const _GoogleMark();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 22,
+    height: 22,
+    alignment: Alignment.center,
+    decoration: const BoxDecoration(
+      color: AppColors.gold,
+      shape: BoxShape.circle,
+    ),
+    child: const Text(
+      'G',
+      style: TextStyle(
+        color: AppColors.ink,
+        fontSize: 14,
+        fontWeight: FontWeight.w900,
+      ),
+    ),
+  );
 }

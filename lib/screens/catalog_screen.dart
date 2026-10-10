@@ -5,7 +5,7 @@ import '../theme/app_theme.dart';
 import '../widgets/network_art.dart';
 import '../widgets/show_card.dart';
 
-class CatalogScreen extends StatefulWidget {
+class CatalogScreen extends StatelessWidget {
   const CatalogScreen({
     super.key,
     required this.catalog,
@@ -22,25 +22,9 @@ class CatalogScreen extends StatefulWidget {
   final bool showHero;
 
   @override
-  State<CatalogScreen> createState() => _CatalogScreenState();
-}
-
-class _CatalogScreenState extends State<CatalogScreen> {
-  String _genre = 'All';
-
-  static const _genres = <String, Set<int>>{
-    'All': {},
-    'Action': {28, 10759},
-    'Drama': {18},
-    'Sci-Fi': {878, 10765},
-    'Horror': {27},
-    'Comedy': {35},
-  };
-
-  @override
   Widget build(BuildContext context) {
     return FutureBuilder<CatalogData>(
-      future: widget.catalog,
+      future: catalog,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _CatalogSkeleton();
@@ -48,126 +32,52 @@ class _CatalogScreenState extends State<CatalogScreen> {
         if (snapshot.hasError) {
           return _CatalogError(
             message: snapshot.error.toString(),
-            onRetry: widget.onRefresh,
+            onRetry: onRefresh,
           );
         }
         final data = snapshot.data;
         if (data == null || data.rows.every((row) => row.items.isEmpty)) {
           return _CatalogError(
             message: 'Nothing to show right now. Pull to try again.',
-            onRetry: widget.onRefresh,
+            onRetry: onRefresh,
           );
         }
         return RefreshIndicator(
-          onRefresh: widget.onRefresh,
+          onRefresh: onRefresh,
           color: AppColors.gold,
           child: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
-              if (widget.showHero && data.featured != null)
+              if (showHero && data.featured != null)
                 SliverToBoxAdapter(
-                  child: _HeroBanner(
-                    show: data.featured!,
-                    onSelect: widget.onSelect,
-                  ),
+                  child: _HeroBanner(show: data.featured!, onSelect: onSelect),
                 ),
-              SliverToBoxAdapter(
-                child: _GenreFilters(
-                  active: _genre,
-                  genres: _genres.keys.toList(),
-                  onSelected: (genre) => setState(() => _genre = genre),
-                ),
-              ),
-              if (widget.continueWatching.isNotEmpty)
+              if (continueWatching.isNotEmpty)
                 SliverToBoxAdapter(
                   child: _ContinueWatchingRow(
-                    items: widget.continueWatching,
-                    onSelect: widget.onSelect,
+                    items: continueWatching,
+                    onSelect: onSelect,
                   ),
                 ),
               SliverList.builder(
                 itemCount: data.rows.length,
                 itemBuilder: (context, index) {
                   final row = data.rows[index];
-                  final genreIds = _genres[_genre] ?? const <int>{};
-                  final items = _genre == 'All'
-                      ? row.items
-                      : row.items
-                            .where(
-                              (show) => show.genreIds.any(genreIds.contains),
-                            )
-                            .toList();
-                  if (items.isEmpty) return const SizedBox.shrink();
+                  if (row.items.isEmpty) return const SizedBox.shrink();
                   return _CatalogRow(
-                    row: CatalogRow(row.title, items),
-                    ranked: false,
-                    onSelect: widget.onSelect,
+                    row: row,
+                    ranked: index == 0,
+                    onSelect: onSelect,
                   );
                 },
               ),
-              const SliverToBoxAdapter(child: _CatalogFooter()),
+              const SliverToBoxAdapter(child: SizedBox(height: 26)),
             ],
           ),
         );
       },
     );
   }
-}
-
-class _GenreFilters extends StatelessWidget {
-  const _GenreFilters({
-    required this.active,
-    required this.genres,
-    required this.onSelected,
-  });
-
-  final String active;
-  final List<String> genres;
-  final ValueChanged<String> onSelected;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(18, 20, 0, 24),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Genres',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 38,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.only(right: 18),
-            itemCount: genres.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              final genre = genres[index];
-              return ChoiceChip(
-                label: Text(genre),
-                selected: genre == active,
-                onSelected: (_) => onSelected(genre),
-                selectedColor: AppColors.gold,
-                backgroundColor: AppColors.card,
-                side: BorderSide(
-                  color: genre == active
-                      ? AppColors.gold
-                      : Colors.white.withValues(alpha: .12),
-                ),
-                labelStyle: TextStyle(
-                  color: genre == active ? AppColors.ink : Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 12,
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    ),
-  );
 }
 
 class _ContinueWatchingRow extends StatelessWidget {
@@ -260,31 +170,6 @@ class _ContinueWatchingRow extends StatelessWidget {
               );
             },
           ),
-        ),
-      ],
-    ),
-  );
-}
-
-class _CatalogFooter extends StatelessWidget {
-  const _CatalogFooter();
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 8, 20, 34),
-    child: Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            TextButton(onPressed: () {}, child: const Text('Help')),
-            TextButton(onPressed: () {}, child: const Text('Privacy')),
-            TextButton(onPressed: () {}, child: const Text('Terms')),
-          ],
-        ),
-        const Text(
-          '© 2026 StreamFlix',
-          style: TextStyle(color: Color(0xFF625A6C), fontSize: 11),
         ),
       ],
     ),

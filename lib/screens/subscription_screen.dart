@@ -7,19 +7,46 @@ import '../widgets/brand_logo.dart';
 class SubscriptionScreen extends StatefulWidget {
   const SubscriptionScreen({
     super.key,
+    required this.plans,
     required this.onBack,
     required this.onContinue,
   });
 
+  final List<SubscriptionPlan> plans;
   final VoidCallback onBack;
-  final ValueChanged<SubscriptionPlan> onContinue;
+  final Future<void> Function(SubscriptionPlan) onContinue;
 
   @override
   State<SubscriptionScreen> createState() => _SubscriptionScreenState();
 }
 
 class _SubscriptionScreenState extends State<SubscriptionScreen> {
-  SubscriptionPlan _selected = subscriptionPlans[1];
+  late SubscriptionPlan _selected;
+  bool _isActivating = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.plans.length > 1 ? widget.plans[1] : widget.plans.first;
+  }
+
+  Future<void> _subscribe() async {
+    setState(() {
+      _isActivating = true;
+      _errorMessage = null;
+    });
+    try {
+      await widget.onContinue(_selected);
+    } catch (error) {
+      if (!mounted) return;
+      setState(
+        () => _errorMessage = 'Subscription could not be activated. Try again.',
+      );
+    } finally {
+      if (mounted) setState(() => _isActivating = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,12 +74,12 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Unlimited entertainment. Change or cancel anytime.',
+                    'One month of access starts when you subscribe.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: AppColors.muted),
                   ),
                   const SizedBox(height: 24),
-                  ...subscriptionPlans.map(
+                  ...widget.plans.map(
                     (plan) => Padding(
                       padding: const EdgeInsets.only(bottom: 14),
                       child: _PlanCard(
@@ -71,6 +98,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                       _TrustItem(Icons.headset_mic_outlined, '24/7 support'),
                     ],
                   ),
+                  if (_errorMessage != null) ...[
+                    const SizedBox(height: 18),
+                    Text(
+                      _errorMessage!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.redAccent),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -88,8 +123,13 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton(
-                  onPressed: () => widget.onContinue(_selected),
-                  child: Text('Continue with ${_selected.name}'),
+                  onPressed: _isActivating ? null : _subscribe,
+                  child: _isActivating
+                      ? const SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Text('Subscribe to ${_selected.name}'),
                 ),
               ),
             ),
