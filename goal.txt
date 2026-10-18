@@ -1,0 +1,106 @@
+GOAL: UNIFY STRIPE BILLING FOR STREAMFLIX WEB AND MOBILE
+
+Objective
+---------
+Create one canonical Stripe/Supabase billing implementation that supports both
+the web app in D:\MeowMeowMeow and the Flutter app in
+D:\streamFlix_mobile_ver\stream_flix without one client's deployment breaking
+the other.
+
+Source of truth
+---------------
+Use D:\MeowMeowMeow\supabase as the canonical Supabase backend. Do not maintain
+independent implementations of shared Stripe Edge Functions in both apps.
+
+Required implementation
+-----------------------
+1. Unify create-checkout-session.
+   - Keep the web version's Stripe Billing Portal flow for existing subscribers.
+   - Accept an explicit, validated client type: "web" or "mobile".
+   - Use APP_URL for web return URLs.
+   - Use the stripe-mobile-return Edge Function for mobile return URLs.
+   - Never trust a caller-provided arbitrary return URL.
+   - Preserve authentication, Stripe price allow-listing, and ownership checks.
+
+2. Support Stripe Billing Portal on mobile.
+   - Return portal URLs for mobile plan changes when appropriate.
+   - Update Flutter URL validation to accept only HTTPS URLs whose exact host is
+     checkout.stripe.com or billing.stripe.com.
+   - Send mobile portal completion and abandonment through stripe-mobile-return
+     so the custom app scheme reopens StreamFlix.
+
+3. Align subscription cancellation.
+   - Use one documented cancellation policy for both clients.
+   - Preferred policy: immediate cancellation through Stripe Billing Portal,
+     matching the current web behavior.
+   - Make create-billing-portal-session mobile-aware using the same validated
+     client type and mobile return bridge.
+   - Keep cancel-subscription only if it is required for backward compatibility;
+     otherwise remove its client usage after the portal flow is verified.
+
+4. Preserve webhook authority.
+   - Stripe webhook events remain the authority for paid activation, renewal,
+     plan changes, payment failure, and cancellation.
+   - Do not grant paid access based only on a browser/app redirect.
+   - Keep signature verification and idempotent event processing.
+   - Keep process_stripe_billing_event and sync_stripe_subscription_plan limited
+     to service_role/postgres.
+
+5. Synchronize backend artifacts.
+   - Include stripe-webhook and create-billing-portal-session in the canonical
+     backend.
+   - Retain the 20261010220000_manage_stripe_subscription.sql migration.
+   - Avoid editing already-applied migration files; add a new migration for any
+     required database correction.
+   - Remove or clearly mark duplicate mobile Supabase functions/migrations as
+     non-deployable so future mobile work cannot overwrite the shared backend.
+
+6. Preserve client activation behavior.
+   - Web: continue polling get_my_subscription_state after Stripe returns.
+   - Mobile: refresh subscription state after the app resumes or opens through
+     the billing callback.
+   - Show a processing state when webhook delivery has not completed yet.
+   - Never start a second charge merely because activation is delayed.
+
+Verification
+------------
+Cover these flows against Stripe test mode and the shared Supabase project:
+
+- Web: new subscription, canceled checkout, plan change, cancellation.
+- Mobile: new subscription, canceled checkout, cold-start callback,
+  foreground-resume callback, plan change, cancellation.
+- Webhook: duplicate event delivery, invoice paid, payment failure,
+  subscription updated, and subscription deleted.
+- Security: unauthenticated calls fail; unknown plan IDs fail; unapproved Stripe
+  prices fail; arbitrary return URLs are impossible; a subscription belonging
+  to another customer cannot be changed or canceled.
+- Regression: both apps read the same active plan and entitlement state after
+  every successful billing action.
+
+Acceptance criteria
+-------------------
+- A single deployed version of each shared Stripe Edge Function works for both
+  web and mobile.
+- Mobile can open both Stripe Checkout and Stripe Billing Portal safely.
+- Stripe returns web users to the website and mobile users to the app.
+- Subscription state changes only after verified Stripe activity.
+- Plan changes and cancellations produce consistent Supabase account,
+  membership, and payment records.
+- Automated checks pass, and each end-to-end Stripe test-mode flow is recorded
+  as passing before production deployment.
+
+Deployment order
+----------------
+1. Add any new database migration and apply it.
+2. Deploy stripe-mobile-return and stripe-webhook.
+3. Deploy the unified checkout and billing-portal functions.
+4. Release the mobile client with Billing Portal URL support.
+5. Release the web client.
+6. Run the verification matrix in Stripe test mode before enabling production.
+
+Out of scope
+------------
+- Replacing Stripe or Supabase.
+- Redesigning subscription screens.
+- Adding annual billing, trials, coupons, refunds, or proration unless separately
+  requested.
