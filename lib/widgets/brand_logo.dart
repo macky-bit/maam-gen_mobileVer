@@ -11,17 +11,13 @@ class BrandLogo extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        ShaderMask(
-          shaderCallback: (rect) => const LinearGradient(
-            colors: [AppColors.gold, AppColors.orange, AppColors.violet],
-          ).createShader(rect),
-          child: Icon(
-            Icons.local_fire_department_rounded,
-            color: Colors.white,
-            size: compact ? 27 : 39,
-          ),
+        Image.asset(
+          'assets/images/streamflix_logo.png',
+          width: compact ? 34 : 52,
+          height: compact ? 34 : 52,
+          fit: BoxFit.contain,
         ),
-        const SizedBox(width: 5),
+        const SizedBox(width: 4),
         ShaderMask(
           shaderCallback: (rect) => const LinearGradient(
             colors: [AppColors.gold, AppColors.orange, AppColors.violetLight],

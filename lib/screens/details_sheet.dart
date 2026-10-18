@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/show.dart';
 import '../models/member_profile.dart';
 import '../theme/app_theme.dart';
+import '../widgets/network_art.dart';
 import '../widgets/trailer_preview.dart';
 import 'watch_screen.dart';
 
@@ -65,9 +66,9 @@ class _DetailsSheetState extends State<_DetailsSheet> {
   Widget build(BuildContext context) {
     final show = widget.show;
     return DraggableScrollableSheet(
-      initialChildSize: .88,
+      initialChildSize: .94,
       minChildSize: .55,
-      maxChildSize: .96,
+      maxChildSize: .98,
       expand: false,
       builder: (context, controller) => SingleChildScrollView(
         controller: controller,
@@ -79,16 +80,17 @@ class _DetailsSheetState extends State<_DetailsSheet> {
                 top: Radius.circular(24),
               ),
               child: AspectRatio(
-                aspectRatio: 16 / 10,
+                aspectRatio: 16 / 9,
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    TrailerPreview(show: show, showControls: true),
+                    NetworkArt(url: show.backdropUrl, fit: BoxFit.cover),
                     const DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
+                          stops: [0, .45, 1],
                           colors: [
                             Color(0x33000000),
                             Color(0x22000000),
@@ -102,19 +104,20 @@ class _DetailsSheetState extends State<_DetailsSheet> {
                       top: 12,
                       child: IconButton.filledTonal(
                         onPressed: () => Navigator.pop(context),
+                        tooltip: 'Close',
                         icon: const Icon(Icons.close_rounded),
                       ),
                     ),
                     Positioned(
                       left: 20,
-                      right: 20,
-                      bottom: 10,
+                      right: 72,
+                      bottom: 18,
                       child: Text(
-                        show.title,
-                        maxLines: 2,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.headlineLarge?.copyWith(fontSize: 31),
+                        show.title.toUpperCase(),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.headlineLarge
+                            ?.copyWith(fontSize: 27, height: .98),
                       ),
                     ),
                   ],
@@ -122,7 +125,7 @@ class _DetailsSheetState extends State<_DetailsSheet> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 34),
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 34),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -130,13 +133,14 @@ class _DetailsSheetState extends State<_DetailsSheet> {
                     spacing: 10,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Text(
-                        '${show.score}% Match',
-                        style: const TextStyle(
-                          color: AppColors.gold,
-                          fontWeight: FontWeight.w800,
+                      if (show.score > 0)
+                        Text(
+                          '${show.score}% Match',
+                          style: const TextStyle(
+                            color: AppColors.gold,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
-                      ),
                       if (show.year.isNotEmpty)
                         Text(
                           show.year,
@@ -159,7 +163,7 @@ class _DetailsSheetState extends State<_DetailsSheet> {
                         child: FilledButton.icon(
                           onPressed: () => _openPlayer(context, show),
                           icon: const Icon(Icons.play_arrow_rounded),
-                          label: const Text('Open preview'),
+                          label: const Text('Play'),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -193,18 +197,40 @@ class _DetailsSheetState extends State<_DetailsSheet> {
                   ),
                   const SizedBox(height: 28),
                   Text(
+                    'Trailer',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: TrailerPreview(show: show, showControls: true),
+                    ),
+                  ),
+                  const SizedBox(height: 28),
+                  Text(
                     'More details',
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 12),
                   _InfoLine(
-                    label: 'Available in',
-                    value: 'Interactive catalog preview',
-                  ),
-                  _InfoLine(
                     label: 'Content type',
                     value: show.mediaType == 'tv' ? 'Series' : 'Feature film',
                   ),
+                  if (show.categoryName.isNotEmpty)
+                    _InfoLine(label: 'Category', value: show.categoryName),
+                  if (show.genreNames.isNotEmpty)
+                    _InfoLine(
+                      label: 'Genres',
+                      value: show.genreNames.join(', '),
+                    ),
+                  if (show.runtimeMinutes case final minutes?)
+                    _InfoLine(label: 'Runtime', value: _runtime(minutes)),
+                  if (show.ageRating.isNotEmpty)
+                    _InfoLine(label: 'Maturity rating', value: show.ageRating),
+                  if (show.videoPath.isNotEmpty)
+                    const _InfoLine(label: 'Video', value: 'Available'),
                   const _InfoLine(
                     label: 'Downloads',
                     value: 'Not available in this build',
@@ -231,6 +257,12 @@ class _DetailsSheetState extends State<_DetailsSheet> {
     );
     widget.onPlaybackEnded();
   }
+}
+
+String _runtime(int minutes) {
+  final hours = minutes ~/ 60;
+  final remainder = minutes % 60;
+  return hours == 0 ? '${remainder}m' : '${hours}h ${remainder}m';
 }
 
 class _QualityBadge extends StatelessWidget {

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -109,8 +110,9 @@ class _WatchScreenState extends State<WatchScreen> {
       _loadVideo(_quality, position: widget.initialPosition, autoplay: true),
     );
     unawaited(_resolveContent());
-    _episodesFuture = _isSeries
-        ? _service.episodes(widget.show.id).then((items) {
+    final tmdbId = widget.show.tmdbReferenceId;
+    _episodesFuture = _isSeries && tmdbId != null
+        ? _service.episodes(tmdbId).then((items) {
             if (mounted) setState(() => _episodes = items);
             return items;
           })
@@ -121,11 +123,19 @@ class _WatchScreenState extends State<WatchScreen> {
   Future<_SoundtrackEntry> _loadSoundtrack() async {
     try {
       final client = Supabase.instance.client;
-      final content = await client
-          .from('content')
-          .select('content_id')
-          .eq('tmdb_id', widget.show.id)
-          .maybeSingle();
+      final content = widget.show.contentId != null
+          ? await client
+                .from('content')
+                .select('content_id')
+                .eq('content_id', widget.show.contentId!)
+                .maybeSingle()
+          : widget.show.tmdbReferenceId != null
+          ? await client
+                .from('content')
+                .select('content_id')
+                .eq('tmdb_id', widget.show.tmdbReferenceId!)
+                .maybeSingle()
+          : null;
       if (content == null) throw StateError('Content not found');
       final row = await client
           .from('soundtrack')
@@ -258,8 +268,23 @@ class _WatchScreenState extends State<WatchScreen> {
         _videoError = null;
       });
     }
-    final next = VideoPlayerController.asset(playbackAssetForQuality(quality));
+    final videoPath = widget.show.videoPath.trim();
+    VideoPlayerController? next;
     try {
+      if (videoPath.isEmpty) {
+        next = VideoPlayerController.asset(playbackAssetForQuality(quality));
+      } else {
+        final url =
+            videoPath.startsWith('http://') || videoPath.startsWith('https://')
+            ? videoPath
+            : await Supabase.instance.client.storage
+                  .from('video_file')
+                  .createSignedUrl(
+                    videoPath.replaceFirst(RegExp(r'^/+'), ''),
+                    3600,
+                  );
+        next = VideoPlayerController.networkUrl(Uri.parse(url));
+      }
       await next.initialize();
       if (!mounted || request != _videoLoad) {
         await next.dispose();
@@ -279,11 +304,13 @@ class _WatchScreenState extends State<WatchScreen> {
       if (autoplay) await next.play();
       if (mounted) setState(() => _videoLoading = false);
     } catch (_) {
-      await next.dispose();
+      await next?.dispose();
       if (mounted && request == _videoLoad) {
         setState(() {
           _videoLoading = false;
-          _videoError = '${quality}p studio demo could not be loaded.';
+          _videoError = videoPath.isEmpty
+              ? '${quality}p studio demo could not be loaded.'
+              : 'This title’s video could not be loaded.';
         });
       }
     }
@@ -510,12 +537,17 @@ class _WatchScreenState extends State<WatchScreen> {
     final updatedText = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
         title: const Text('Edit comment'),
         content: TextField(
           controller: controller,
           autofocus: true,
           maxLength: commentMaxLength,
-          maxLines: 4,
+          minLines: 1,
+          maxLines: 3,
+          textInputAction: TextInputAction.newline,
+          decoration: const InputDecoration(hintText: 'Update your comment'),
         ),
         actions: [
           TextButton(
@@ -623,7 +655,8 @@ class _WatchScreenState extends State<WatchScreen> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            NetworkArt(url: imageUrl, fit: BoxFit.cover),
+            if (!(_video?.value.isInitialized ?? false))
+              NetworkArt(url: imageUrl, fit: BoxFit.cover),
             if (_video?.value.isInitialized ?? false)
               Center(
                 child: AspectRatio(
@@ -751,6 +784,9 @@ class _WatchScreenState extends State<WatchScreen> {
                           isSeries: _isSeries,
                           episode: episode,
                           quality: _quality,
+                          uploadedVideo: widget.show.videoPath
+                              .trim()
+                              .isNotEmpty,
                           commentCount: _comments.length,
                           onBack: () => Navigator.pop(context),
                           reaction: _myReaction,
@@ -834,6 +870,7 @@ class _TopBar extends StatelessWidget {
     required this.isSeries,
     required this.episode,
     required this.quality,
+    required this.uploadedVideo,
     required this.commentCount,
     required this.reaction,
     required this.onBack,
@@ -847,6 +884,7 @@ class _TopBar extends StatelessWidget {
   final bool isSeries;
   final Episode? episode;
   final int quality;
+  final bool uploadedVideo;
   final int commentCount;
   final String? reaction;
   final VoidCallback onBack;
@@ -888,7 +926,7 @@ class _TopBar extends StatelessWidget {
                   if (year.isNotEmpty) year,
                   if (episode != null) 'Episode ${episode!.number}',
                   isSeries ? 'Series' : 'Movie',
-                  'Studio demo clip',
+                  uploadedVideo ? 'Uploaded video' : 'Studio demo clip',
                   '${quality}p',
                 ].join('   '),
                 style: const TextStyle(fontSize: 12, color: Colors.white70),
@@ -1657,7 +1695,6 @@ class _CommunityPanelState extends State<_CommunityPanel> {
                     itemBuilder: (context, index) {
                       final item = visible[index];
                       final isOwn = item.userId == widget.userId;
-                      final avatar = item.authorAvatarUrl;
                       final pending = widget.actionPending == item.id;
                       return Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1665,16 +1702,7 @@ class _CommunityPanelState extends State<_CommunityPanel> {
                           CircleAvatar(
                             radius: 20,
                             backgroundColor: AppColors.violetDeep,
-                            backgroundImage: avatar == null
-                                ? null
-                                : NetworkImage(avatar),
-                            child: avatar == null
-                                ? Text(
-                                    item.authorName.characters.firstOrNull
-                                            ?.toUpperCase() ??
-                                        '?',
-                                  )
-                                : null,
+                            child: const Text('C'),
                           ),
                           const SizedBox(width: 11),
                           Expanded(
@@ -1686,8 +1714,8 @@ class _CommunityPanelState extends State<_CommunityPanel> {
                                     Expanded(
                                       child: Text(
                                         isOwn
-                                            ? '${item.authorName} · You'
-                                            : item.authorName,
+                                            ? 'Community member · You'
+                                            : 'Community member',
                                         style: const TextStyle(
                                           fontWeight: FontWeight.w800,
                                         ),
@@ -1826,6 +1854,7 @@ String _communityMessage(Object error, String fallback) {
   if (error is ArgumentError && error.message != null) {
     return error.message.toString();
   }
+  if (kDebugMode) return '$fallback\n$error';
   return fallback;
 }
 

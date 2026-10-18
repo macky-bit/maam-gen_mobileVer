@@ -73,25 +73,34 @@ class SubscriptionService {
       return const SubscriptionCheckoutResult(updated: true);
     }
     final checkoutUrl = Uri.tryParse(data['url']?.toString() ?? '');
-    if (checkoutUrl == null ||
-        checkoutUrl.scheme != 'https' ||
-        checkoutUrl.host != 'checkout.stripe.com') {
+    if (!isStripeBillingUrl(checkoutUrl)) {
       throw StateError('Stripe Checkout returned an invalid URL.');
     }
     return SubscriptionCheckoutResult(checkoutUrl: checkoutUrl);
   }
 
-  Future<void> cancel() async {
+  Future<Uri> startCancellation() async {
     final response = await client.functions.invoke(
-      'cancel-subscription',
-      body: {'mobile': true},
+      'create-billing-portal-session',
+      body: {'action': 'cancel', 'mobile': true},
     );
     final data = response.data;
-    if (data is! Map || data['canceled'] != true) {
-      throw StateError('The subscription could not be canceled.');
+    if (data is! Map) {
+      throw StateError('Stripe returned an invalid cancellation response.');
     }
+    final portalUrl = Uri.tryParse(data['url']?.toString() ?? '');
+    if (!isStripeBillingUrl(portalUrl) ||
+        portalUrl!.host != 'billing.stripe.com') {
+      throw StateError('Stripe returned an invalid cancellation URL.');
+    }
+    return portalUrl;
   }
 }
+
+bool isStripeBillingUrl(Uri? uri) =>
+    uri != null &&
+    uri.scheme == 'https' &&
+    const {'checkout.stripe.com', 'billing.stripe.com'}.contains(uri.host);
 
 List<SubscriptionPlan> availablePlanChanges(
   List<SubscriptionPlan> plans,

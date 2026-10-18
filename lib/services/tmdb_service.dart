@@ -120,10 +120,11 @@ class TmdbService {
   Future<CatalogData> home() async {
     final results = await Future.wait([
       _list('/trending/all/week'),
-      _list('/movie/popular', type: 'movie'),
+      _list('/movie/now_playing', type: 'movie'),
       _list('/tv/popular', type: 'tv'),
       _list('/movie/top_rated', type: 'movie'),
-      _list('/movie/upcoming', type: 'movie'),
+      _list('/movie/popular', type: 'movie'),
+      _list('/tv/top_rated', type: 'tv'),
     ]);
     final trending = results[0];
     final featured = trending.cast<Show?>().firstWhere(
@@ -134,10 +135,15 @@ class TmdbService {
       featured: featured,
       rows: [
         CatalogRow('Trending Now', trending),
-        CatalogRow('Popular Movies', results[1]),
-        CatalogRow('Binge-worthy TV', results[2]),
-        CatalogRow('Critically Acclaimed', results[3]),
-        CatalogRow('Coming Soon', results[4]),
+        CatalogRow('New Movies', results[1]),
+        CatalogRow('Popular TV Shows', results[2]),
+        CatalogRow(
+          'Top 10 Movies',
+          results[3].take(10).toList(growable: false),
+          ranked: true,
+        ),
+        CatalogRow('Recommended Movies', results[4]),
+        CatalogRow('Recommended TV Shows', results[5]),
       ],
     );
   }
@@ -181,6 +187,83 @@ class TmdbService {
     );
   }
 
+  Future<List<CatalogRow>> upcomingRows({DateTime? from}) async {
+    final today = DateTime(
+      from?.year ?? DateTime.now().year,
+      from?.month ?? DateTime.now().month,
+      from?.day ?? DateTime.now().day,
+    );
+    final thisSunday = today.add(Duration(days: 7 - today.weekday));
+    final nextMonday = thisSunday.add(const Duration(days: 1));
+    final nextSunday = thisSunday.add(const Duration(days: 7));
+    final laterStart = nextSunday.add(const Duration(days: 1));
+    final windows = [
+      _UpcomingWindow('Coming This Week', today, thisSunday),
+      _UpcomingWindow('Coming Next Week', nextMonday, nextSunday),
+      _UpcomingWindow(
+        'Worth the Wait',
+        laterStart,
+        laterStart.add(const Duration(days: 180)),
+      ),
+    ];
+
+    return Future.wait(windows.map(_upcomingRow));
+  }
+
+  Future<CatalogRow> _upcomingRow(_UpcomingWindow window) async {
+    final groups = await Future.wait([
+      _upcomingForType('movie', 'primary_release_date', window),
+      _upcomingForType('tv', 'first_air_date', window),
+    ]);
+    final items = groups.expand((group) => group).toList()
+      ..sort(
+        (left, right) => window.title == 'Worth the Wait'
+            ? right.popularity.compareTo(left.popularity)
+            : left.date.compareTo(right.date),
+      );
+    final seen = <String>{};
+    final shows = items
+        .where((item) => seen.add('${item.show.mediaType}-${item.show.id}'))
+        .map((item) => item.show)
+        .take(8)
+        .toList(growable: false);
+    return CatalogRow(window.title, shows);
+  }
+
+  Future<List<_DatedShow>> _upcomingForType(
+    String type,
+    String dateField,
+    _UpcomingWindow window,
+  ) async {
+    final data = await _get('/discover/$type', {
+      '$dateField.gte': _dateString(window.start),
+      '$dateField.lte': _dateString(window.end),
+      'sort_by': 'popularity.desc',
+      'include_adult': 'false',
+    });
+    return (data['results'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map((item) {
+          final date =
+              (item[type == 'movie' ? 'release_date' : 'first_air_date'] ?? '')
+                  .toString();
+          final show = Show.fromJson(item, type: type);
+          return _DatedShow(
+            show,
+            date,
+            (item['popularity'] as num?)?.toDouble() ?? 0,
+          );
+        })
+        .where(
+          (item) =>
+              item.date.compareTo(_dateString(window.start)) >= 0 &&
+              item.date.compareTo(_dateString(window.end)) <= 0 &&
+              item.show.posterPath.isNotEmpty &&
+              (!kidsMode || item.show.isKidsAppropriate),
+        )
+        .toList(growable: false);
+  }
+
   Future<CatalogData> _catalogFor(
     String featurePath,
     String type,
@@ -213,8 +296,10 @@ class TmdbService {
 
   Future<String?> trailerKey(Show show) async {
     try {
+      final tmdbId = show.tmdbReferenceId;
+      if (tmdbId == null) return null;
       final type = show.mediaType == 'tv' ? 'tv' : 'movie';
-      final data = await _get('/$type/${show.id}/videos');
+      final data = await _get('/$type/$tmdbId/videos');
       return selectTrailerKey(data['results'] as List<dynamic>? ?? const []);
     } catch (_) {
       return null;
@@ -251,3 +336,22 @@ class TmdbService {
         .toList();
   }
 }
+
+class _UpcomingWindow {
+  const _UpcomingWindow(this.title, this.start, this.end);
+  final String title;
+  final DateTime start;
+  final DateTime end;
+}
+
+class _DatedShow {
+  const _DatedShow(this.show, this.date, this.popularity);
+  final Show show;
+  final String date;
+  final double popularity;
+}
+
+String _dateString(DateTime value) =>
+    '${value.year.toString().padLeft(4, '0')}-'
+    '${value.month.toString().padLeft(2, '0')}-'
+    '${value.day.toString().padLeft(2, '0')}';

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -33,10 +34,13 @@ class _StreamFlixAppState extends State<StreamFlixApp>
   String? _subscriptionError;
   bool _isResolvingSubscription = false;
   bool _checkoutPending = false;
+  bool _cancellationPending = false;
+  bool _confirmingCancellation = false;
   String _planName = 'Basic';
   MemberProfile? _activeProfile;
   Timer? _expiryTimer;
   StreamSubscription<AuthState>? _authSubscription;
+  StreamSubscription<Uri>? _linkSubscription;
 
   @override
   void initState() {
@@ -47,6 +51,13 @@ class _StreamFlixAppState extends State<StreamFlixApp>
     if (auth?.currentSession != null) {
       unawaited(_routeAuthenticatedSession());
     }
+    final appLinks = AppLinks();
+    _linkSubscription = appLinks.uriLinkStream.listen(_handleAppLink);
+    unawaited(
+      appLinks.getInitialLink().then((uri) {
+        if (uri != null) _handleAppLink(uri);
+      }),
+    );
     _authSubscription = auth?.onAuthStateChange.listen((state) {
       if (!mounted) return;
       if (state.event == AuthChangeEvent.passwordRecovery) {
@@ -75,7 +86,62 @@ class _StreamFlixAppState extends State<StreamFlixApp>
     WidgetsBinding.instance.removeObserver(this);
     _expiryTimer?.cancel();
     _authSubscription?.cancel();
+    _linkSubscription?.cancel();
     super.dispose();
+  }
+
+  void _handleAppLink(Uri uri) {
+    if (uri.scheme != 'com.streamflix.app' || uri.host != 'billing-callback') {
+      return;
+    }
+    final billing = uri.queryParameters['billing'];
+    if (billing == 'cancelled') {
+      _cancellationPending = true;
+      unawaited(_confirmCancellation());
+      return;
+    }
+    if (billing == 'cancel-abandoned') {
+      _cancellationPending = false;
+      return;
+    }
+    if (billing == 'updated' || uri.queryParameters['checkout'] == 'success') {
+      _checkoutPending = true;
+      unawaited(_routeAuthenticatedSession(preserveActivePage: true));
+    }
+  }
+
+  Future<void> _confirmCancellation() async {
+    final client = widget.supabase;
+    if (_confirmingCancellation || client?.auth.currentSession == null) return;
+    _confirmingCancellation = true;
+    if (mounted) {
+      setState(() {
+        _page = _AppPage.loading;
+        _subscriptionError = null;
+      });
+    }
+    try {
+      for (var attempt = 0; attempt < 15; attempt++) {
+        try {
+          if (!(await SubscriptionService(client!).fetchStatus()).isActive) {
+            _cancellationPending = false;
+            await _signOut();
+            return;
+          }
+        } catch (_) {
+          // Stripe's webhook or the network may still be catching up.
+        }
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+      if (mounted) {
+        setState(() {
+          _subscriptionError =
+              'Stripe is still processing your cancellation. Try again.';
+        });
+      }
+    } finally {
+      _confirmingCancellation = false;
+    }
   }
 
   @override
@@ -213,7 +279,14 @@ class _StreamFlixAppState extends State<StreamFlixApp>
   }
 
   Future<void> _signOut() async {
-    await widget.supabase?.auth.signOut();
+    final auth = widget.supabase?.auth;
+    if (auth != null) {
+      try {
+        await auth.signOut(scope: SignOutScope.global);
+      } catch (_) {
+        await auth.signOut(scope: SignOutScope.local);
+      }
+    }
     if (mounted) {
       setState(() {
         _page = _AppPage.login;
@@ -337,7 +410,9 @@ class _StreamFlixAppState extends State<StreamFlixApp>
           _AppPage.loading => _SubscriptionLoadingView(
             key: const ValueKey('subscription-loading'),
             errorMessage: _subscriptionError,
-            onRetry: _routeAuthenticatedSession,
+            onRetry: _cancellationPending
+                ? _confirmCancellation
+                : _routeAuthenticatedSession,
             onSignOut: _signOut,
           ),
           _AppPage.login => LoginScreen(

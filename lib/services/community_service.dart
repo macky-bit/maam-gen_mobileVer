@@ -48,8 +48,6 @@ class CommunityComment {
     required this.commentedAt,
     required this.userId,
     required this.memberProfileId,
-    required this.authorName,
-    required this.authorAvatarUrl,
   });
 
   final String id;
@@ -57,8 +55,6 @@ class CommunityComment {
   final DateTime? commentedAt;
   final String userId;
   final int? memberProfileId;
-  final String authorName;
-  final String? authorAvatarUrl;
 
   CommunityComment copyWith({String? text}) => CommunityComment(
     id: id,
@@ -66,8 +62,6 @@ class CommunityComment {
     commentedAt: commentedAt,
     userId: userId,
     memberProfileId: memberProfileId,
-    authorName: authorName,
-    authorAvatarUrl: authorAvatarUrl,
   );
 }
 
@@ -115,26 +109,16 @@ class CommunityService {
 
     final commentRows = (await commentFuture as List<dynamic>)
         .cast<Map<String, dynamic>>();
-    final avatars = await _signedAvatars(commentRows);
     final comments = commentRows
         .map((row) {
-          final storedAvatar = row['author_avatar']?.toString().trim() ?? '';
           return CommunityComment(
             id: row['comment_id'].toString(),
             text: row['comment_text'].toString(),
             commentedAt: DateTime.tryParse(
               row['commented_at']?.toString() ?? '',
             ),
-            userId: row['user_id'].toString(),
+            userId: row['user_id']?.toString() ?? '',
             memberProfileId: (row['member_profile_id'] as num?)?.toInt(),
-            authorName: row['author_name']?.toString().trim().isNotEmpty == true
-                ? row['author_name'].toString().trim()
-                : 'Community member',
-            authorAvatarUrl: storedAvatar.isEmpty
-                ? null
-                : _isExternal(storedAvatar)
-                ? storedAvatar
-                : avatars[storedAvatar],
           );
         })
         .toList(growable: false);
@@ -202,8 +186,6 @@ class CommunityService {
       commentedAt: DateTime.tryParse(row['commented_at']?.toString() ?? ''),
       userId: row['user_id'].toString(),
       memberProfileId: profile.id,
-      authorName: profile.name,
-      authorAvatarUrl: profile.avatarUrl.isEmpty ? null : profile.avatarUrl,
     );
   }
 
@@ -244,25 +226,4 @@ class CommunityService {
         .maybeSingle();
     return row?['user_id']?.toString();
   }
-
-  Future<Map<String, String>> _signedAvatars(
-    List<Map<String, dynamic>> rows,
-  ) async {
-    final paths = rows
-        .map((row) => row['author_avatar']?.toString().trim() ?? '')
-        .where((path) => path.isNotEmpty && !_isExternal(path))
-        .toSet();
-    final entries = await Future.wait(
-      paths.map((path) async {
-        final url = await supabase.storage
-            .from('avatar')
-            .createSignedUrl(path, 3600);
-        return MapEntry(path, url);
-      }),
-    );
-    return Map.fromEntries(entries);
-  }
 }
-
-bool _isExternal(String value) =>
-    RegExp(r'^(https?:|data:|blob:)', caseSensitive: false).hasMatch(value);

@@ -759,7 +759,7 @@ class _SubscriptionDetailsScreenState extends State<SubscriptionDetailsScreen>
       builder: (context) => AlertDialog(
         title: const Text('Cancel membership?'),
         content: const Text(
-          'Your access ends immediately. This action cannot be undone.',
+          'Your membership will be canceled immediately. This action cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -776,10 +776,11 @@ class _SubscriptionDetailsScreenState extends State<SubscriptionDetailsScreen>
     if (confirmed != true || !mounted) return;
     setState(() => _busy = true);
     try {
-      await _service.cancel();
-      if (!mounted) return;
-      Navigator.pop(context);
-      await widget.onSubscriptionCanceled();
+      final uri = await _service.startCancellation();
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw StateError('Stripe cancellation could not be opened.');
+      }
+      if (mounted) setState(() => _busy = false);
     } catch (_) {
       if (!mounted) return;
       setState(() => _busy = false);

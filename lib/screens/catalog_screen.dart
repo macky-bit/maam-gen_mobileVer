@@ -5,9 +5,8 @@ import '../services/watch_history_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/network_art.dart';
 import '../widgets/show_card.dart';
-import '../widgets/trailer_preview.dart';
 
-class CatalogScreen extends StatelessWidget {
+class CatalogScreen extends StatefulWidget {
   const CatalogScreen({
     super.key,
     required this.catalog,
@@ -24,9 +23,16 @@ class CatalogScreen extends StatelessWidget {
   final bool showHero;
 
   @override
+  State<CatalogScreen> createState() => _CatalogScreenState();
+}
+
+class _CatalogScreenState extends State<CatalogScreen> {
+  String _genre = 'All';
+
+  @override
   Widget build(BuildContext context) {
     return FutureBuilder<CatalogData>(
-      future: catalog,
+      future: widget.catalog,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _CatalogSkeleton();
@@ -34,42 +40,71 @@ class CatalogScreen extends StatelessWidget {
         if (snapshot.hasError) {
           return _CatalogError(
             message: snapshot.error.toString(),
-            onRetry: onRefresh,
+            onRetry: widget.onRefresh,
           );
         }
         final data = snapshot.data;
         if (data == null || data.rows.every((row) => row.items.isEmpty)) {
           return _CatalogError(
             message: 'Nothing to show right now. Pull to try again.',
-            onRetry: onRefresh,
+            onRetry: widget.onRefresh,
           );
         }
+        final visibleRows = data.rows
+            .map(
+              (row) => CatalogRow(
+                row.title,
+                _genre == 'All'
+                    ? row.items
+                    : row.items
+                          .where(
+                            (show) => show.genreNames.any(
+                              (name) =>
+                                  name.toLowerCase() == _genre.toLowerCase(),
+                            ),
+                          )
+                          .toList(growable: false),
+                ranked: row.ranked,
+              ),
+            )
+            .toList(growable: false);
         return RefreshIndicator(
-          onRefresh: onRefresh,
+          onRefresh: widget.onRefresh,
           color: AppColors.gold,
           child: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
-              if (showHero && data.featured != null)
+              if (widget.showHero && data.featured != null)
                 SliverToBoxAdapter(
-                  child: _HeroBanner(show: data.featured!, onSelect: onSelect),
+                  child: _HeroBanner(
+                    show: data.featured!,
+                    onSelect: widget.onSelect,
+                  ),
                 ),
-              if (continueWatching.isNotEmpty)
+              if (data.genres.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: _GenreFilters(
+                    genres: data.genres,
+                    selected: _genre,
+                    onSelected: (genre) => setState(() => _genre = genre),
+                  ),
+                ),
+              if (widget.continueWatching.isNotEmpty)
                 SliverToBoxAdapter(
                   child: _ContinueWatchingRow(
-                    items: continueWatching,
-                    onSelect: onSelect,
+                    items: widget.continueWatching,
+                    onSelect: widget.onSelect,
                   ),
                 ),
               SliverList.builder(
-                itemCount: data.rows.length,
+                itemCount: visibleRows.length,
                 itemBuilder: (context, index) {
-                  final row = data.rows[index];
+                  final row = visibleRows[index];
                   if (row.items.isEmpty) return const SizedBox.shrink();
                   return _CatalogRow(
                     row: row,
-                    ranked: index == 0,
-                    onSelect: onSelect,
+                    ranked: row.ranked,
+                    onSelect: widget.onSelect,
                   );
                 },
               ),
@@ -80,6 +115,37 @@ class CatalogScreen extends StatelessWidget {
       },
     );
   }
+}
+
+class _GenreFilters extends StatelessWidget {
+  const _GenreFilters({
+    required this.genres,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final List<String> genres;
+  final String selected;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 58,
+    child: ListView.separated(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+      scrollDirection: Axis.horizontal,
+      itemCount: genres.length + 1,
+      separatorBuilder: (_, _) => const SizedBox(width: 8),
+      itemBuilder: (context, index) {
+        final genre = index == 0 ? 'All' : genres[index - 1];
+        return ChoiceChip(
+          label: Text(genre),
+          selected: genre == selected,
+          onSelected: (_) => onSelected(genre),
+        );
+      },
+    ),
+  );
 }
 
 class _ContinueWatchingRow extends StatelessWidget {
@@ -191,7 +257,7 @@ class _HeroBanner extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          TrailerPreview(show: show),
+          NetworkArt(url: show.backdropUrl, fit: BoxFit.cover),
           const DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -234,24 +300,25 @@ class _HeroBanner extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  show.title,
-                  maxLines: 2,
+                  show.title.toUpperCase(),
+                  maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(
                     context,
-                  ).textTheme.displayLarge?.copyWith(fontSize: 39, height: .95),
+                  ).textTheme.displayLarge?.copyWith(fontSize: 34, height: .94),
                 ),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 10,
                   children: [
-                    Text(
-                      '${show.score}% Match',
-                      style: const TextStyle(
-                        color: AppColors.gold,
-                        fontWeight: FontWeight.w800,
+                    if (show.score > 0)
+                      Text(
+                        '${show.score}% Match',
+                        style: const TextStyle(
+                          color: AppColors.gold,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                    ),
                     if (show.year.isNotEmpty) Text(show.year),
                     Text(show.mediaType == 'tv' ? 'Series' : 'Movie'),
                   ],

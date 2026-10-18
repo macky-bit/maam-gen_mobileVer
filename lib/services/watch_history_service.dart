@@ -34,10 +34,13 @@ class WatchHistoryService {
   final SupabaseClient supabase;
 
   Future<int?> resolveContentId(Show show) async {
+    if (show.contentId != null) return show.contentId;
+    final tmdbId = show.tmdbReferenceId;
+    if (tmdbId == null) return null;
     final rows = await supabase
         .from('content')
         .select('content_id, category(category_name)')
-        .eq('tmdb_id', show.id)
+        .eq('tmdb_id', tmdbId)
         .limit(10);
     for (final value in rows) {
       final row = value;
@@ -71,8 +74,10 @@ class WatchHistoryService {
     final content = await supabase
         .from('content')
         .select(
-          'content_id, tmdb_id, title, synopsis, release_year, thumbnail, '
-          'category(category_name)',
+          'content_id, tmdb_id, catalog_source, title, synopsis, release_year, '
+          'runtime, age_rating, thumbnail, popularity_rank, '
+          'category(category_name), genre!content_genre_id_fkey(genre_name), '
+          'content_genre(genre(genre_name))',
         )
         .inFilter('content_id', ids);
     final catalog = <int, Map<String, dynamic>>{
@@ -83,10 +88,16 @@ class WatchHistoryService {
         .map((row) {
           final contentId = (row['content_id'] as num).toInt();
           final details = catalog[contentId];
-          final tmdbId = (details?['tmdb_id'] as num?)?.toInt();
           final thumbnail = (row['thumbnail'] ?? details?['thumbnail'] ?? '')
               .toString();
-          final category = _categoryName(details?['category']);
+          final thumbnailUrl =
+              thumbnail.isNotEmpty &&
+                  !thumbnail.startsWith('http://') &&
+                  !thumbnail.startsWith('https://')
+              ? supabase.storage
+                    .from('content-thumbnails')
+                    .getPublicUrl(thumbnail)
+              : thumbnail;
           return WatchHistoryEntry(
             contentId: contentId,
             title: (row['title'] ?? details?['title'] ?? 'Untitled').toString(),
@@ -94,21 +105,9 @@ class WatchHistoryService {
             watchedAt: DateTime.tryParse(row['watch_date']?.toString() ?? ''),
             lastPlaybackSeconds: (row['last_playback'] as num?)?.toInt() ?? 0,
             runtimeMinutes: (row['runtime'] as num?)?.toInt(),
-            show: tmdbId == null
+            show: details == null
                 ? null
-                : Show(
-                    id: tmdbId,
-                    title: (details?['title'] ?? row['title'] ?? 'Untitled')
-                        .toString(),
-                    overview: (details?['synopsis'] ?? '').toString(),
-                    posterPath: thumbnail,
-                    backdropPath: thumbnail,
-                    year: (details?['release_year'] ?? '').toString(),
-                    score: 0,
-                    mediaType: _categoryMatches(category, true)
-                        ? 'tv'
-                        : 'movie',
-                  ),
+                : Show.fromCatalogJson(details, thumbnailUrl: thumbnailUrl),
           );
         })
         .toList(growable: false);

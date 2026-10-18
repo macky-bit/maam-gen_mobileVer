@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/show.dart';
-import '../services/tmdb_service.dart';
+import '../services/catalog_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/show_card.dart';
 
@@ -13,7 +13,8 @@ class SearchScreen extends StatefulWidget {
     required this.service,
     required this.onSelect,
   });
-  final TmdbService service;
+
+  final CatalogService service;
   final ValueChanged<Show> onSelect;
 
   @override
@@ -35,8 +36,9 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
-    _controller.removeListener(_queryChanged);
-    _controller.dispose();
+    _controller
+      ..removeListener(_queryChanged)
+      ..dispose();
     super.dispose();
   }
 
@@ -44,17 +46,16 @@ class _SearchScreenState extends State<SearchScreen> {
     _debounce?.cancel();
     final query = _controller.text.trim();
     if (query.isEmpty) {
-      if (mounted) {
-        setState(() {
-          _activeQuery = '';
-          _results = null;
-        });
-      }
+      setState(() {
+        _activeQuery = '';
+        _results = null;
+      });
       return;
     }
-    _debounce = Timer(const Duration(milliseconds: 350), () {
-      _runSearch(query, dismissKeyboard: false);
-    });
+    _debounce = Timer(
+      const Duration(milliseconds: 350),
+      () => _runSearch(query, dismissKeyboard: false),
+    );
   }
 
   void _runSearch(String? submitted, {required bool dismissKeyboard}) {
@@ -69,45 +70,69 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: AppColors.ink,
-        titleSpacing: 0,
-        title: TextField(
-          controller: _controller,
-          autofocus: true,
-          onSubmitted: (query) => _runSearch(query, dismissKeyboard: true),
-          textInputAction: TextInputAction.search,
-          decoration: InputDecoration(
-            hintText: 'Movies, shows and more',
-            prefixIcon: const Icon(Icons.search_rounded),
-            suffixIcon: IconButton(
-              onPressed: _controller.text.trim().isEmpty
-                  ? null
-                  : () => _runSearch(null, dismissKeyboard: true),
-              icon: const Icon(Icons.arrow_forward_rounded),
-              tooltip: 'Search',
+  Widget build(BuildContext context) => Scaffold(
+    body: Column(
+      children: [
+        SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 10, 16, 10),
+            child: Row(
+              children: [
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  tooltip: 'Back',
+                  icon: const Icon(Icons.arrow_back_rounded),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: SizedBox(
+                    height: 52,
+                    child: TextField(
+                      controller: _controller,
+                      autofocus: true,
+                      onSubmitted: (query) =>
+                          _runSearch(query, dismissKeyboard: true),
+                      textInputAction: TextInputAction.search,
+                      decoration: InputDecoration(
+                        hintText: 'Search title, genre, category, or type',
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _controller,
+                          builder: (context, value, _) => value.text.isEmpty
+                              ? const SizedBox.shrink()
+                              : IconButton(
+                                  onPressed: _controller.clear,
+                                  tooltip: 'Clear search',
+                                  icon: const Icon(Icons.close_rounded),
+                                ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-            contentPadding: const EdgeInsets.symmetric(vertical: 10),
           ),
         ),
-      ),
-      body: _buildBody(),
-    );
-  }
+        Expanded(child: _buildBody()),
+      ],
+    ),
+  );
 
   Widget _buildBody() {
-    if (_results == null) {
-      return const Center(
+    final results = _results;
+    if (results == null) {
+      return const Align(
+        alignment: Alignment.topCenter,
         child: Padding(
-          padding: EdgeInsets.all(32),
+          padding: EdgeInsets.fromLTRB(32, 64, 32, 32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 Icons.search_rounded,
-                size: 62,
+                size: 52,
                 color: AppColors.violetLight,
               ),
               SizedBox(height: 14),
@@ -117,7 +142,7 @@ class _SearchScreenState extends State<SearchScreen> {
               ),
               SizedBox(height: 8),
               Text(
-                'Search films and TV series from the TMDB catalog.',
+                'Search the StreamFlix catalog by title, genre, category, movie, or series.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.muted),
               ),
@@ -127,7 +152,7 @@ class _SearchScreenState extends State<SearchScreen> {
       );
     }
     return FutureBuilder<List<Show>>(
-      future: _results,
+      future: results,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(
@@ -136,27 +161,10 @@ class _SearchScreenState extends State<SearchScreen> {
         }
         if (snapshot.hasError) {
           return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(
-                    Icons.wifi_off_rounded,
-                    size: 48,
-                    color: AppColors.violetLight,
-                  ),
-                  const SizedBox(height: 14),
-                  Text(snapshot.error.toString(), textAlign: TextAlign.center),
-                  const SizedBox(height: 18),
-                  FilledButton.icon(
-                    onPressed: () =>
-                        _runSearch(_activeQuery, dismissKeyboard: false),
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Try again'),
-                  ),
-                ],
-              ),
+            child: FilledButton.icon(
+              onPressed: () => _runSearch(_activeQuery, dismissKeyboard: false),
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Try again'),
             ),
           );
         }
@@ -164,43 +172,48 @@ class _SearchScreenState extends State<SearchScreen> {
         if (items.isEmpty) {
           return const Center(
             child: Text(
-              'No titles found',
+              'No matching titles',
               style: TextStyle(color: AppColors.muted),
             ),
           );
         }
-        return CustomScrollView(
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          slivers: [
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 18, 16, 4),
-                child: Text(
-                  '${items.length} results for “$_activeQuery”',
-                  style: const TextStyle(
-                    color: AppColors.muted,
-                    fontWeight: FontWeight.w600,
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth >= 700 ? 5 : 3;
+            return CustomScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 18, 16, 4),
+                    child: Text(
+                      '${items.length} results for “$_activeQuery”',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-            SliverPadding(
-              padding: const EdgeInsets.all(16),
-              sliver: SliverGrid.builder(
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  childAspectRatio: 2 / 3,
-                  crossAxisSpacing: 10,
-                  mainAxisSpacing: 10,
+                SliverPadding(
+                  padding: const EdgeInsets.all(16),
+                  sliver: SliverGrid.builder(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns,
+                      childAspectRatio: 2 / 3,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 10,
+                    ),
+                    itemCount: items.length,
+                    itemBuilder: (context, index) => ShowGridTile(
+                      show: items[index],
+                      onTap: () => widget.onSelect(items[index]),
+                    ),
+                  ),
                 ),
-                itemCount: items.length,
-                itemBuilder: (context, index) => ShowGridTile(
-                  show: items[index],
-                  onTap: () => widget.onSelect(items[index]),
-                ),
-              ),
-            ),
-          ],
+              ],
+            );
+          },
         );
       },
     );

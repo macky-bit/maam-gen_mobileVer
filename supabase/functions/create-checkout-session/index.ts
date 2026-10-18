@@ -3,7 +3,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
 const jsonHeaders = { "Content-Type": "application/json" }
 
-function response(body: Record<string, unknown>, status: number, origin: string) {
+function response(
+  body: Record<string, unknown>,
+  status: number,
+  origin: string,
+) {
   return Response.json(body, {
     status,
     headers: {
@@ -27,16 +31,51 @@ function allowedOrigin(request: Request) {
   return url.origin
 }
 
-function priceForPlan(configuredPrice: unknown) {
+const priceForPlan = (configuredPrice: unknown) => {
   const price = String(configuredPrice ?? "").trim()
   const allowed = new Set([
     Deno.env.get("STRIPE_PRICE_BASIC")?.trim(),
     Deno.env.get("STRIPE_PRICE_STANDARD")?.trim(),
     Deno.env.get("STRIPE_PRICE_PREMIUM")?.trim(),
   ])
-  if (!price.startsWith("price_") || !allowed.has(price))
+  if (!price.startsWith("price_") || !allowed.has(price)) {
     throw new Error("This plan is not configured for Stripe Checkout")
+  }
   return price
+}
+
+async function enablePortalPlanUpdates(stripe: Stripe, configuration: string) {
+  const priceIds = [
+    Deno.env.get("STRIPE_PRICE_BASIC")?.trim(),
+    Deno.env.get("STRIPE_PRICE_STANDARD")?.trim(),
+    Deno.env.get("STRIPE_PRICE_PREMIUM")?.trim(),
+  ].filter((price): price is string => Boolean(price?.startsWith("price_")))
+  const prices = await Promise.all(
+    [...new Set(priceIds)].map((price) => stripe.prices.retrieve(price)),
+  )
+  const groupedProducts = new Map<string, string[]>()
+  for (const price of prices) {
+    const productId =
+      typeof price.product === "string" ? price.product : price.product.id
+    groupedProducts.set(productId, [
+      ...(groupedProducts.get(productId) ?? []),
+      price.id,
+    ])
+  }
+
+  await stripe.billingPortal.configurations.update(configuration, {
+    features: {
+      subscription_update: {
+        enabled: true,
+        default_allowed_updates: ["price"],
+        proration_behavior: "none",
+        products: [...groupedProducts].map(([product, configuredPrices]) => ({
+          product,
+          prices: configuredPrices,
+        })),
+      },
+    },
+  })
 }
 
 Deno.serve(async (request) => {
@@ -44,8 +83,13 @@ Deno.serve(async (request) => {
   try {
     origin = allowedOrigin(request)
   } catch {
-    if (request.method !== "OPTIONS")
-      return response({ error: "The application origin is not allowed" }, 400, "*")
+    if (request.method !== "OPTIONS") {
+      return response(
+        { error: "The application origin is not allowed" },
+        400,
+        "*",
+      )
+    }
   }
 
   if (request.method === "OPTIONS") return response({ ok: true }, 200, origin)
@@ -58,11 +102,11 @@ Deno.serve(async (request) => {
       throw new Error("Sign in before choosing a plan")
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!
-    const serviceClient = createClient(
-      supabaseUrl,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-      { auth: { persistSession: false, autoRefreshToken: false } },
-    )
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    const stripeKey = Deno.env.get("STRIPE_SECRET_KEY")!
+    const serviceClient = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
     const { data: authData, error: authError } =
       await serviceClient.auth.getUser(authorization.slice(7))
     if (authError || !authData.user)
@@ -79,19 +123,21 @@ Deno.serve(async (request) => {
     if (!mobile && origin === "*")
       throw new Error("The application origin is not allowed")
 
-    const [{ data: account, error: accountError }, { data: plan, error: planError }] =
-      await Promise.all([
-        serviceClient
-          .from("user")
-          .select("user_id, email, stripe_customer_id")
-          .eq("auth_user_id", authData.user.id)
-          .single(),
-        serviceClient
-          .from("subscription")
-          .select("subscription_id, plan_name, stripe_price_id")
-          .eq("subscription_id", planId)
-          .single(),
-      ])
+    const [
+      { data: account, error: accountError },
+      { data: plan, error: planError },
+    ] = await Promise.all([
+      serviceClient
+        .from("user")
+        .select("user_id, email, stripe_customer_id")
+        .eq("auth_user_id", authData.user.id)
+        .single(),
+      serviceClient
+        .from("subscription")
+        .select("subscription_id, plan_name, stripe_price_id")
+        .eq("subscription_id", planId)
+        .single(),
+    ])
     if (accountError || !account)
       throw new Error("No StreamFlix account is linked to this login")
     if (planError || !plan) throw new Error("The selected plan is unavailable")
@@ -104,23 +150,19 @@ Deno.serve(async (request) => {
       .or(`ends_at.is.null,ends_at.gt.${new Date().toISOString()}`)
       .limit(1)
       .maybeSingle()
-    const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!)
+    const stripe = new Stripe(stripeKey)
     const selectedPrice = priceForPlan(plan.stripe_price_id)
     const metadata = {
       streamflix_user_id: String(account.user_id),
       streamflix_plan_id: String(plan.subscription_id),
     }
 
-    if (activeMembership) {
-      const stripeSubscriptionId = String(
-        activeMembership.stripe_subscription_id ?? "",
-      ).trim()
-      if (!stripeSubscriptionId.startsWith("sub_"))
-        throw new Error(
-          "This subscription cannot be changed online. Contact support for assistance.",
-        )
-
-      const subscription = await stripe.subscriptions.retrieve(stripeSubscriptionId)
+    const stripeSubscriptionId = String(
+      activeMembership?.stripe_subscription_id ?? "",
+    ).trim()
+    if (activeMembership && stripeSubscriptionId.startsWith("sub_")) {
+      const subscription =
+        await stripe.subscriptions.retrieve(stripeSubscriptionId)
       if (
         subscription.status !== "canceled" &&
         Number(activeMembership.subscription_id) === planId
@@ -130,32 +172,50 @@ Deno.serve(async (request) => {
       if (
         subscription.status !== "canceled" &&
         subscription.items.data.length !== 1
-      )
+      ) {
         throw new Error(
           "This subscription has an unsupported billing configuration. Contact support for assistance.",
         )
+      }
 
       if (subscription.status !== "canceled") {
-        await stripe.subscriptions.update(stripeSubscriptionId, {
-          items: [{
-            id: subscription.items.data[0].id,
-            price: selectedPrice,
-            quantity: 1,
-          }],
-          metadata,
-          cancel_at_period_end: false,
-          payment_behavior: "error_if_incomplete",
-          proration_behavior: "none",
-        })
-        const { error: syncError } = await serviceClient.rpc(
-          "sync_stripe_subscription_plan",
-          {
-            selected_stripe_subscription_id: stripeSubscriptionId,
-            selected_plan_id: planId,
+        const configuration = Deno.env
+          .get("STRIPE_PORTAL_CONFIGURATION_ID")
+          ?.trim()
+        if (!configuration?.startsWith("bpc_"))
+          throw new Error("Stripe Customer Portal is not configured")
+        await enablePortalPlanUpdates(stripe, configuration)
+
+        const customerId =
+          typeof subscription.customer === "string"
+            ? subscription.customer
+            : subscription.customer.id
+        const returnUrl = mobile
+          ? `${supabaseUrl}/functions/v1/stripe-mobile-return?billing=updated`
+          : `${origin}/?billing=updated`
+        const portalSession = await stripe.billingPortal.sessions.create({
+          customer: customerId,
+          configuration,
+          return_url: returnUrl,
+          flow_data: {
+            type: "subscription_update_confirm",
+            subscription_update_confirm: {
+              subscription: stripeSubscriptionId,
+              items: [
+                {
+                  id: subscription.items.data[0].id,
+                  price: selectedPrice,
+                  quantity: 1,
+                },
+              ],
+            },
+            after_completion: {
+              type: "redirect",
+              redirect: { return_url: returnUrl },
+            },
           },
-        )
-        if (syncError) throw syncError
-        return response({ updated: true, planId }, 200, origin)
+        })
+        return response({ url: portalSession.url }, 200, origin)
       }
     }
 
@@ -179,6 +239,7 @@ Deno.serve(async (request) => {
         ? `${returnBase}?checkout=cancelled`
         : `${returnBase}/?checkout=cancelled`,
     })
+
     if (!session.url) throw new Error("Stripe did not return a Checkout URL")
     return response({ url: session.url }, 200, origin)
   } catch (error) {
@@ -188,9 +249,10 @@ Deno.serve(async (request) => {
     )
     return response(
       {
-        error: error instanceof Error
-          ? error.message
-          : "Unable to start Stripe Checkout",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to start Stripe Checkout",
       },
       400,
       origin,

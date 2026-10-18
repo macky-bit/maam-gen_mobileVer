@@ -108,7 +108,13 @@ class _OpeningVideoScreenState extends State<OpeningVideoScreen> {
     if (_finished) return;
     _finished = true;
     unawaited(_video?.pause());
-    widget.onComplete();
+    // VideoPlayerController notifies its inherited VideoPlayer widget when
+    // playback reaches the end. Replacing this screen from inside that
+    // notification deactivates the notifier while it still has dependants,
+    // which trips Flutter's InheritedElement lifecycle assertions.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onComplete();
+    });
   }
 
   @override

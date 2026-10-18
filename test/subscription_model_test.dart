@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_flix/models/subscription_plan.dart';
 import 'package:stream_flix/models/playback_quality.dart';
@@ -17,6 +19,59 @@ void main() {
     final changes = availablePlanChanges(fallbackSubscriptionPlans, 2);
     expect(changes.map((plan) => plan.id), isNot(contains(2)));
     expect(changes, hasLength(fallbackSubscriptionPlans.length - 1));
+  });
+
+  test('accepts only Stripe-hosted checkout and billing links', () {
+    expect(
+      isStripeBillingUrl(Uri.parse('https://checkout.stripe.com/c/pay/test')),
+      isTrue,
+    );
+    expect(
+      isStripeBillingUrl(
+        Uri.parse('https://billing.stripe.com/p/session/test'),
+      ),
+      isTrue,
+    );
+    expect(
+      isStripeBillingUrl(Uri.parse('https://billing.stripe.com.evil.test')),
+      isFalse,
+    );
+    expect(isStripeBillingUrl(Uri.parse('http://billing.stripe.com')), isFalse);
+  });
+
+  test('maps Stripe subscription management to mobile return links', () {
+    final checkout = File(
+      'supabase/functions/create-checkout-session/index.ts',
+    ).readAsStringSync();
+    final portal = File(
+      'supabase/functions/create-billing-portal-session/index.ts',
+    ).readAsStringSync();
+    final cancellation = File(
+      'supabase/functions/cancel-subscription/index.ts',
+    ).readAsStringSync();
+    final webhook = File(
+      'supabase/functions/stripe-webhook/index.ts',
+    ).readAsStringSync();
+    final app = File('lib/app.dart').readAsStringSync();
+    final service = File(
+      'lib/services/subscription_service.dart',
+    ).readAsStringSync();
+
+    expect(checkout, contains('subscription_update_confirm'));
+    expect(checkout, contains('stripe-mobile-return?billing=updated'));
+    expect(portal, contains('type: "subscription_cancel"'));
+    expect(portal, contains('mode: "immediately"'));
+    expect(portal, contains('returnUrl("cancelled")'));
+    expect(portal, contains('stripe-mobile-return?billing=\${status}'));
+    expect(cancellation, contains('stripeConfirmedInactive'));
+    expect(
+      cancellation,
+      contains('subscriptionCustomerId !== stripeCustomerId'),
+    );
+    expect(webhook, contains('sync_stripe_subscription_plan'));
+    expect(service, contains("'create-billing-portal-session'"));
+    expect(app, contains("billing == 'cancelled'"));
+    expect(app, contains('attempt < 15'));
   });
   test('maps a database plan and formats its peso price', () {
     final plan = SubscriptionPlan.fromJson({

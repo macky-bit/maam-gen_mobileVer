@@ -11,19 +11,21 @@ class ShowCard extends StatelessWidget {
     required this.onTap,
     this.rank,
     this.width = 132,
+    this.unavailable = false,
   });
 
   final Show show;
   final VoidCallback onTap;
   final int? rank;
   final double width;
+  final bool unavailable;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       width: rank == null ? width : width + 30,
       child: InkWell(
-        onTap: onTap,
+        onTap: unavailable ? null : onTap,
         borderRadius: BorderRadius.circular(12),
         child: Stack(
           alignment: Alignment.bottomRight,
@@ -59,6 +61,7 @@ class ShowCard extends StatelessWidget {
                   fit: StackFit.expand,
                   children: [
                     NetworkArt(url: show.posterUrl, fit: BoxFit.cover),
+                    if (unavailable) const ColoredBox(color: Color(0x990D0817)),
                     const DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
@@ -90,17 +93,43 @@ class ShowCard extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 3),
-                          Text(
-                            '${show.score}% Match',
-                            style: const TextStyle(
-                              color: AppColors.gold,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
+                          if (show.score > 0)
+                            Text(
+                              '${show.score}% Match',
+                              style: const TextStyle(
+                                color: AppColors.gold,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
                         ],
                       ),
                     ),
+                    if (unavailable)
+                      const Positioned(
+                        left: 8,
+                        top: 8,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Color(0xE6241638),
+                            borderRadius: BorderRadius.all(Radius.circular(6)),
+                          ),
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 4,
+                            ),
+                            child: Text(
+                              'UNAVAILABLE',
+                              style: TextStyle(
+                                fontSize: 8,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: .5,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -113,11 +142,21 @@ class ShowCard extends StatelessWidget {
 }
 
 class ShowGridTile extends StatelessWidget {
-  const ShowGridTile({super.key, required this.show, required this.onTap});
+  const ShowGridTile({
+    super.key,
+    required this.show,
+    required this.onTap,
+    this.unavailable = false,
+  });
   final Show show;
   final VoidCallback onTap;
+  final bool unavailable;
 
   @override
-  Widget build(BuildContext context) =>
-      ShowCard(show: show, onTap: onTap, width: double.infinity);
+  Widget build(BuildContext context) => ShowCard(
+    show: show,
+    onTap: onTap,
+    width: double.infinity,
+    unavailable: unavailable,
+  );
 }

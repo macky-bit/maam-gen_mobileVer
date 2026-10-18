@@ -26,6 +26,7 @@ class _TrailerPreviewState extends State<TrailerPreview> {
   StreamSubscription<YoutubePlayerValue>? _subscription;
   var _request = 0;
   var _failed = false;
+  var _ready = false;
 
   @override
   void initState() {
@@ -46,7 +47,12 @@ class _TrailerPreviewState extends State<TrailerPreview> {
     await _subscription?.cancel();
     _subscription = null;
     if (previous != null) await previous.close();
-    if (mounted) setState(() => _failed = false);
+    if (mounted) {
+      setState(() {
+        _failed = false;
+        _ready = false;
+      });
+    }
 
     final key = await TmdbService().trailerKey(widget.show);
     if (!mounted || request != _request || key == null) return;
@@ -62,12 +68,20 @@ class _TrailerPreviewState extends State<TrailerPreview> {
         strictRelatedVideos: true,
       ),
     );
+    setState(() => _controller = controller);
     _subscription = controller.stream.listen((value) {
       if (value.hasError && mounted && identical(_controller, controller)) {
-        setState(() => _failed = true);
+        setState(() {
+          _failed = true;
+          _ready = false;
+        });
+      } else if (!_ready &&
+          value.playerState == PlayerState.playing &&
+          mounted &&
+          identical(_controller, controller)) {
+        setState(() => _ready = true);
       }
     });
-    setState(() => _controller = controller);
   }
 
   @override
@@ -87,14 +101,18 @@ class _TrailerPreviewState extends State<TrailerPreview> {
       children: [
         NetworkArt(url: widget.show.backdropUrl, fit: BoxFit.cover),
         if (controller != null && !_failed)
-          Center(
-            child: IgnorePointer(
-              ignoring: !widget.showControls,
-              child: YoutubePlayer(
-                controller: controller,
-                aspectRatio: 16 / 9,
-                backgroundColor: Colors.black,
-                autoFullScreen: widget.showControls,
+          AnimatedOpacity(
+            opacity: _ready ? 1 : 0,
+            duration: const Duration(milliseconds: 250),
+            child: Center(
+              child: IgnorePointer(
+                ignoring: !widget.showControls,
+                child: YoutubePlayer(
+                  controller: controller,
+                  aspectRatio: 16 / 9,
+                  backgroundColor: Colors.transparent,
+                  autoFullScreen: widget.showControls,
+                ),
               ),
             ),
           ),

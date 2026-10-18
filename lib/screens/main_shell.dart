@@ -1,10 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/member_profile.dart';
 import '../models/show.dart';
+import '../services/catalog_service.dart';
+import '../services/content_notification_service.dart';
 import '../services/tmdb_service.dart';
 import '../services/library_store.dart';
 import '../services/watch_history_service.dart';
@@ -43,9 +46,16 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
-  late TmdbService _service;
+  late CatalogService _catalogService;
+  late ContentNotificationService _notificationService;
+  late TmdbService _tmdbService;
   final Set<Show> _saved = {};
   final List<WatchHistoryEntry> _continueWatching = [];
+  List<ContentNotification> _notifications = const [];
+  RealtimeChannel? _notificationChannel;
+  DateTime? _notificationsSeenAt;
+  bool _notificationsLoading = true;
+  String? _notificationsError;
   int _tab = 0;
   late List<Future<CatalogData>?> _catalogs;
 
@@ -58,17 +68,18 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
-    _service = TmdbService(kidsMode: widget.activeProfile.isKids);
+    _configureServices();
     _loadCatalogs();
     unawaited(_loadLibrary());
     unawaited(_loadWatchHistory());
+    unawaited(_startNotifications());
   }
 
   @override
   void didUpdateWidget(covariant MainShell oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.activeProfile.id != widget.activeProfile.id) {
-      _service = TmdbService(kidsMode: widget.activeProfile.isKids);
+      _configureServices();
       _loadCatalogs();
       setState(() {
         _tab = 0;
@@ -77,7 +88,118 @@ class _MainShellState extends State<MainShell> {
       });
       unawaited(_loadLibrary());
       unawaited(_loadWatchHistory());
+      unawaited(_loadNotificationsSeenAt());
+      unawaited(_refreshNotifications());
     }
+  }
+
+  void _configureServices() {
+    _catalogService = CatalogService(
+      widget.supabase,
+      kidsMode: widget.activeProfile.isKids,
+    );
+    _notificationService = ContentNotificationService(widget.supabase);
+    _tmdbService = TmdbService(kidsMode: widget.activeProfile.isKids);
+  }
+
+  String get _notificationSeenKey =>
+      'sf_content_notifications_seen_v1_${widget.supabase.auth.currentUser!.id}_${widget.activeProfile.id}';
+
+  Future<void> _startNotifications() async {
+    await _loadNotificationsSeenAt();
+    await _refreshNotifications();
+    if (!mounted) return;
+    _notificationChannel = widget.supabase
+        .channel('mobile-dashboard-content-notifications')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'content',
+          callback: (_) {
+            unawaited(_refreshNotifications());
+            _refreshLoadedCatalogs();
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'content_genre',
+          callback: (_) => _refreshLoadedCatalogs(),
+        )
+        .subscribe();
+  }
+
+  Future<void> _loadNotificationsSeenAt() async {
+    final preferences = await SharedPreferences.getInstance();
+    final milliseconds = preferences.getInt(_notificationSeenKey);
+    if (!mounted) return;
+    setState(() {
+      _notificationsSeenAt = milliseconds == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(milliseconds);
+    });
+  }
+
+  Future<void> _refreshNotifications() async {
+    if (mounted) {
+      setState(() {
+        _notificationsLoading = true;
+        _notificationsError = null;
+      });
+    }
+    try {
+      final notifications = await _notificationService.load();
+      if (!mounted) return;
+      setState(() {
+        _notifications = notifications
+            .where(
+              (notification) =>
+                  !widget.activeProfile.isKids ||
+                  notification.show.isKidsAppropriate,
+            )
+            .toList(growable: false);
+        _notificationsLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _notificationsLoading = false;
+        _notificationsError = 'Content updates are temporarily unavailable.';
+      });
+    }
+  }
+
+  void _refreshLoadedCatalogs() {
+    if (!mounted) return;
+    setState(() {
+      for (var index = 0; index < _catalogs.length; index++) {
+        if (_catalogs[index] == null) continue;
+        _catalogs[index] = switch (index) {
+          0 => _loadCatalog(CatalogKind.home),
+          1 => _loadCatalog(CatalogKind.movies),
+          2 => _loadCatalog(CatalogKind.tvShows),
+          _ => _loadCatalog(CatalogKind.newAndPopular),
+        };
+      }
+    });
+  }
+
+  Future<void> _markNotificationsSeen() async {
+    final newest = _notifications.firstOrNull?.changedAt;
+    if (newest == null) return;
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setInt(
+      _notificationSeenKey,
+      newest.millisecondsSinceEpoch,
+    );
+    if (mounted) setState(() => _notificationsSeenAt = newest);
+  }
+
+  @override
+  void dispose() {
+    final channel = _notificationChannel;
+    if (channel != null) unawaited(widget.supabase.removeChannel(channel));
+    super.dispose();
   }
 
   Future<void> _loadLibrary() async {
@@ -127,25 +249,40 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _loadCatalogs() {
-    _catalogs = [_service.home(), null, null, null];
+    _catalogs = [_loadCatalog(CatalogKind.home), null, null, null];
+  }
+
+  Future<CatalogData> _loadCatalog(CatalogKind kind) async {
+    final catalog = await _catalogService.load(kind);
+    if (kind != CatalogKind.newAndPopular) return catalog;
+    try {
+      final upcoming = await _tmdbService.upcomingRows();
+      return CatalogData(
+        featured: catalog.featured,
+        rows: [...catalog.rows, ...upcoming],
+        genres: catalog.genres,
+      );
+    } catch (_) {
+      return catalog;
+    }
   }
 
   Future<CatalogData> _catalogFor(int index) {
     return _catalogs[index] ??= switch (index) {
-      0 => _service.home(),
-      1 => _service.movies(),
-      2 => _service.television(),
-      _ => _service.newAndPopular(),
+      0 => _loadCatalog(CatalogKind.home),
+      1 => _loadCatalog(CatalogKind.movies),
+      2 => _loadCatalog(CatalogKind.tvShows),
+      _ => _loadCatalog(CatalogKind.newAndPopular),
     };
   }
 
   Future<void> _refresh(int index) async {
     setState(() {
       _catalogs[index] = switch (index) {
-        0 => _service.home(),
-        1 => _service.movies(),
-        2 => _service.television(),
-        _ => _service.newAndPopular(),
+        0 => _loadCatalog(CatalogKind.home),
+        1 => _loadCatalog(CatalogKind.movies),
+        2 => _loadCatalog(CatalogKind.tvShows),
+        _ => _loadCatalog(CatalogKind.newAndPopular),
       };
     });
     try {
@@ -178,7 +315,7 @@ class _MainShellState extends State<MainShell> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => SearchScreen(
-          service: _service,
+          service: _catalogService,
           onSelect: (show) {
             Navigator.pop(context);
             WidgetsBinding.instance.addPostFrameCallback(
@@ -191,6 +328,7 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _showNotifications() {
+    unawaited(_markNotificationsSeen());
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.inkSoft,
@@ -209,24 +347,36 @@ class _MainShellState extends State<MainShell> {
                 ),
               ),
               const SizedBox(height: 14),
-              const _NotificationTile(
-                icon: Icons.local_fire_department_rounded,
-                title: 'New & trending this week',
-                message: 'Fresh movies and series are waiting for you.',
-                time: 'Now',
-              ),
-              const _NotificationTile(
-                icon: Icons.movie_filter_outlined,
-                title: 'Because you watch dramas',
-                message: 'Explore the latest critically acclaimed stories.',
-                time: '2h',
-              ),
-              const _NotificationTile(
-                icon: Icons.download_done_rounded,
-                title: 'Ready to watch offline',
-                message: 'Your downloaded titles are ready.',
-                time: '1d',
-              ),
+              if (_notificationsLoading)
+                const Center(child: CircularProgressIndicator())
+              else if (_notificationsError case final message?)
+                Text(message, style: const TextStyle(color: AppColors.muted))
+              else if (_notifications.isEmpty)
+                const Text(
+                  'No new content updates.',
+                  style: TextStyle(color: AppColors.muted),
+                )
+              else
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: _notifications.length,
+                    itemBuilder: (context, index) {
+                      final notification = _notifications[index];
+                      return _NotificationTile(
+                        title: notification.show.title,
+                        message: notification.show.overview.isEmpty
+                            ? 'Now available on StreamFlix.'
+                            : notification.show.overview,
+                        time: _notificationDate(notification.changedAt),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showDetails(notification.show);
+                        },
+                      );
+                    },
+                  ),
+                ),
             ],
           ),
         ),
@@ -250,7 +400,14 @@ class _MainShellState extends State<MainShell> {
           ),
           IconButton(
             onPressed: _showNotifications,
-            icon: const Icon(Icons.notifications_none_rounded),
+            icon: Badge(
+              isLabelVisible: _notifications.any(
+                (notification) =>
+                    _notificationsSeenAt == null ||
+                    notification.changedAt.isAfter(_notificationsSeenAt!),
+              ),
+              child: const Icon(Icons.notifications_none_rounded),
+            ),
             tooltip: 'Notifications',
           ),
           Padding(
@@ -302,7 +459,8 @@ class _MainShellState extends State<MainShell> {
                 catalog: _catalogs[1]!,
                 onSelect: _showDetails,
                 onRefresh: () => _refresh(1),
-                continueWatching: _continueWatching,
+                continueWatching: const [],
+                showHero: true,
               )
             else
               const SizedBox.shrink(),
@@ -311,7 +469,8 @@ class _MainShellState extends State<MainShell> {
                 catalog: _catalogs[2]!,
                 onSelect: _showDetails,
                 onRefresh: () => _refresh(2),
-                continueWatching: _continueWatching,
+                continueWatching: const [],
+                showHero: true,
               )
             else
               const SizedBox.shrink(),
@@ -320,7 +479,7 @@ class _MainShellState extends State<MainShell> {
                 catalog: _catalogs[3]!,
                 onSelect: _showDetails,
                 onRefresh: () => _refresh(3),
-                continueWatching: _continueWatching,
+                continueWatching: const [],
               )
             else
               const SizedBox.shrink(),
@@ -374,23 +533,27 @@ class _MainShellState extends State<MainShell> {
 
 class _NotificationTile extends StatelessWidget {
   const _NotificationTile({
-    required this.icon,
     required this.title,
     required this.message,
     required this.time,
+    required this.onTap,
   });
 
-  final IconData icon;
   final String title;
   final String message;
   final String time;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) => ListTile(
+    onTap: onTap,
     contentPadding: EdgeInsets.zero,
     leading: CircleAvatar(
       backgroundColor: AppColors.violet.withValues(alpha: .18),
-      child: Icon(icon, color: AppColors.violetLight),
+      child: const Icon(
+        Icons.movie_filter_outlined,
+        color: AppColors.violetLight,
+      ),
     ),
     title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
     subtitle: Text(
@@ -404,6 +567,11 @@ class _NotificationTile extends StatelessWidget {
       style: const TextStyle(color: AppColors.muted, fontSize: 11),
     ),
   );
+}
+
+String _notificationDate(DateTime value) {
+  final local = value.toLocal();
+  return '${local.month}/${local.day}/${local.year}';
 }
 
 class _MyList extends StatelessWidget {
